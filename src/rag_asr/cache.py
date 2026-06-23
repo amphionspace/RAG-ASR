@@ -6,12 +6,16 @@ import fcntl
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
 import numpy as np
 import torch
+
+from rag_asr.hotwords import normalize_hotwords
 
 logger = logging.getLogger(__name__)
 
@@ -68,18 +72,34 @@ def save_text_emb_cache(
     embs: torch.Tensor,
     *,
     acquire_lock: bool = True,
+    overwrite: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     def _write() -> None:
-        if path.exists():
+        if path.exists() and not overwrite:
             logger.info("text emb cache already exists, skip save: %s", path)
             return
-        np.savez_compressed(
-            str(path),
-            words=np.array(words, dtype=object),
-            embs=embs.cpu().numpy().astype("float32"),
-        )
+        tmp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "wb",
+                dir=str(path.parent),
+                delete=False,
+            ) as tmp:
+                tmp_name = tmp.name
+                np.savez_compressed(
+                    tmp,
+                    words=np.array(words, dtype=object),
+                    embs=embs.cpu().numpy().astype("float32"),
+                )
+            os.replace(tmp_name, path)
+        finally:
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except FileNotFoundError:
+                    pass
         logger.info("text emb cache saved: %s (%d words)", path, len(words))
 
     if not acquire_lock:
@@ -122,4 +142,4 @@ def load_biasing_tsv(tsv_file: str) -> dict[str, list[str]]:
 
 def load_hotword_pool_file(path: str | Path) -> list[str]:
     with open(path, encoding="utf-8") as f:
-        return sorted({line.strip() for line in f if line.strip()})
+        return normalize_hotwords(f).words

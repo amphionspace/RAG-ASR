@@ -227,6 +227,28 @@ python scripts/triton_client_test.py \
 python scripts/test_triton_examples.py --url localhost:8000
 ```
 
+热词库管理与检索统一客户端：
+
+```bash
+# 显示已有热词库，支持分页和子串过滤
+python scripts/triton_hotword_client.py --url localhost:8000 list --limit 20
+python scripts/triton_hotword_client.py --url localhost:8000 list --query 北京 --limit 20
+
+# 批量添加或从文件导入
+python scripts/triton_hotword_client.py --url localhost:8000 add 北京烤鸭 上海迪士尼
+python scripts/triton_hotword_client.py --url localhost:8000 import hotwords.txt
+python scripts/triton_hotword_client.py --url localhost:8000 import hotwords.json
+
+# 批量删除与从服务端配置文件重载
+python scripts/triton_hotword_client.py --url localhost:8000 delete 北京烤鸭
+python scripts/triton_hotword_client.py --url localhost:8000 reload
+
+# 音频检索仍返回 projector 与热词召回结果
+python scripts/triton_hotword_client.py --url localhost:8000 infer \
+  --wav examples/audio/cv_zh_33411896.wav \
+  --top-k 50
+```
+
 ### HTTP 调试接口
 
 ```bash
@@ -244,9 +266,14 @@ curl -X POST http://localhost:8080/retrieve \
 
 | 名称 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `WAV` | FP32 | 是 | 一维波形 |
+| `WAV` | FP32 | 检索必填 | 一维波形 |
 | `SAMPLE_RATE` | INT32 | 否 | 默认 16000 |
 | `TOP_K` | INT32 | 否 | 默认 50（见 `config.pbtxt`） |
+| `ACTION` | STRING | 否 | 默认 `infer`；可选 `infer`、`list`、`add`、`delete`、`reload` |
+| `HOTWORDS` | STRING | 管理写操作必填 | JSON 字符串或 JSON 数组，用于 `add` / `delete` |
+| `QUERY` | STRING | 否 | `list` 的子串过滤 |
+| `LIMIT` | INT32 | 否 | `list` 返回数量 |
+| `OFFSET` | INT32 | 否 | `list` 分页偏移 |
 
 **输出**
 
@@ -255,8 +282,29 @@ curl -X POST http://localhost:8080/retrieve \
 | `WORD_LIST` | STRING | JSON 数组字符串 |
 | `PROJECTOR_OUT` | FP32 | `(T', D_proj)` |
 | `PROJECTOR_LEN` | INT32 | 有效帧数 |
+| `STATUS` | STRING | 管理动作状态 |
+| `MESSAGE` | STRING | 管理动作 JSON 摘要，包含新增、删除、重复、非法等统计 |
+| `HOTWORD_COUNT` | INT32 | 当前热词库总数 |
+| `HOTWORD_LIST` | STRING | `list` 或写操作影响到的热词 JSON 数组 |
 
 模型仓库：`triton/rag_asr_retrieve/`（`config.pbtxt` + `1/model.py`）。
+
+热词管理说明：
+
+- `ACTION` 未传时保持旧客户端兼容，仍按音频检索执行。
+- `add` 会在同一个 Triton 模型实例内用已加载的 `tokenizer + text_tower + adapter` 为新增热词生成 embedding，并立即加入 `_pool_embs_gpu`。
+- `delete` 按规范化后的 dedupe key 删除，英文/拉丁默认大小写不敏感，中文保持词面 exact。
+- `list` 显示当前服务内存里的已有热词库，可分页返回，避免一次性拉取大词库。
+- `import` 是客户端命令：客户端读取本地 txt/json 后把热词数组发给 Triton；服务端不会读取客户端传来的任意文件路径。
+- 管理操作会把规范化后的词库写回 `hotword_pool_file`，并覆盖刷新 text embedding cache，保证重启后词库一致。
+- 当前热词状态属于单个 Triton Python backend 实例，生产应保持 `instance_group count: 1`；多实例/多机需要额外同步机制。
+
+入库规则：
+
+- 先做 `strip()` 和连续空白折叠，过滤空字符串。
+- 参考 AmphionASR 的脚本感知长度规则：CJK/Thai 按字符计长，英文按词计长；默认中文至少 2 字，英文至少 1 词。
+- 按 canonical key 去重，重复提交不会重复生成 embedding。
+- 不做拼音、近音或语义级合并，这些属于后续二阶段 rerank 或 hard-negative 逻辑。
 
 ---
 
@@ -287,6 +335,7 @@ RAG-ASR/
 │   ├── serve_http.sh            # 启动 HTTP 调试服务
 │   ├── serve_http.py
 │   ├── triton_client_test.py    # 单条 Triton 测试
+│   ├── triton_hotword_client.py # Triton 检索 + 热词管理客户端
 │   └── test_triton_examples.py  # examples 批量测试 + recall
 └── examples/                    # 样例音频与标注
 ```
