@@ -388,6 +388,75 @@ class AmphionAudioTower(nn.Module):
         proj_lens = torch.tensor(lens_list, dtype=torch.long, device=device)
         return torch.stack(pooled_list), proj, proj_lens
 
+    @staticmethod
+    def _qwen3_projector_lens(feature_lens: torch.Tensor) -> torch.Tensor:
+        """Mirror Qwen3ASR audio conv output length calculation."""
+        input_lengths_leave = feature_lens % 100
+        feat_lengths = (input_lengths_leave - 1) // 2 + 1
+        output_lengths = (
+            ((feat_lengths - 1) // 2 + 1 - 1) // 2
+            + 1
+            + (feature_lens // 100) * 13
+        )
+        return output_lengths.long()
+
+    def forward_with_projector_packed(
+        self,
+        features: torch.Tensor,
+        feature_lens: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Encode audio with a packed Qwen3 call when supported.
+
+        The Amphion backend already supports a true batched path.  For Qwen3,
+        this method concatenates valid frames from every utterance and passes
+        the per-utterance lengths to ``audio_tower`` in one call.
+        """
+        if self._backend != "qwen3":
+            return self._forward_with_projector_amphion(features, feature_lens)
+        return self._forward_with_projector_qwen3_packed(features, feature_lens)
+
+    def _forward_with_projector_qwen3_packed(
+        self,
+        features: torch.Tensor,
+        feature_lens: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        lens_list = [int(length.item()) for length in feature_lens]
+        packed_frames = [
+            features[i, : lens, :].to(dtype=self._encoder_dtype)
+            for i, lens in enumerate(lens_list)
+        ]
+        packed = torch.cat(packed_frames, dim=0).T.contiguous()
+        with torch.no_grad():
+            out = self.audio_tower(packed, feature_lens=feature_lens)
+
+        hidden = out.last_hidden_state.float()
+        proj_lens = self._qwen3_projector_lens(feature_lens).to(hidden.device)
+        split_lens = [int(length.item()) for length in proj_lens]
+        if sum(split_lens) != hidden.shape[0]:
+            raise RuntimeError(
+                "packed Qwen3 projector length mismatch: "
+                f"sum(lengths)={sum(split_lens)} hidden={hidden.shape[0]}"
+            )
+
+        embs_all = self.adapter(hidden)
+        hidden_parts = hidden.split(split_lens, dim=0)
+        embs_parts = embs_all.split(split_lens, dim=0)
+        max_t = max(split_lens)
+        proj_dim = int(hidden.shape[1])
+        device = hidden.device
+        proj = torch.zeros(
+            len(split_lens), max_t, proj_dim, dtype=torch.float32, device=device
+        )
+        embs = torch.zeros(
+            len(split_lens), max_t, self.embed_dim, dtype=embs_all.dtype, device=device
+        )
+        for i, (hidden_i, embs_i) in enumerate(zip(hidden_parts, embs_parts)):
+            proj[i, : hidden_i.shape[0], :] = hidden_i
+            embs[i, : embs_i.shape[0], :] = embs_i
+
+        pooled = self.pool(embs, proj_lens)
+        return F.normalize(pooled, dim=-1), proj, proj_lens
+
     def forward(
         self,
         features: torch.Tensor,

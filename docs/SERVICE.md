@@ -46,6 +46,49 @@
 
 ---
 
+## 当前推荐配置
+
+生产默认使用 `rag_asr_retrieve`（v1 单条 `WAV` 协议）。
+
+推荐理由：
+
+- v1 协议与现有客户端兼容，输入一条音频返回一条热词列表和一条 projector 序列。
+- v1/v2 safe path 的核心计算都走逐条 Qwen3 audio path；v2 不会带来吞吐提升。
+- v2 只有在客户端天然需要一次提交多条音频时才有接口价值。
+
+上游限流建议：
+
+| 目标 | 建议值 |
+|------|--------|
+| 推荐 in-flight 并发 | 2 |
+| 可接受 in-flight 并发 | 4 |
+| 不建议超过 | 8 |
+| 单实例稳定吞吐上限 | 约 70-72 req/s |
+| 建议队列超时 | 约 200 ms |
+
+超过并发 4 后，吞吐基本不再提升，只会增加排队时延。压测中并发 128 的吞吐仍约 71 req/s，但 p95 已超过 1.5s。
+
+### v2 是否可以直接替换 v1
+
+不能无条件直接替换。
+
+`rag_asr_retrieve_v2` 使用不同模型名和不同输入输出协议：
+
+- v1 输入：`WAV`、`SAMPLE_RATE`、`TOP_K`
+- v2 输入：`WAV_BATCH`、`WAV_LEN`、`SAMPLE_RATE`、`TOP_K`
+- v1 输出：单条 `PROJECTOR_OUT`、单条 `PROJECTOR_LEN`、单条 `WORD_LIST`
+- v2 输出：batch 形式 `PROJECTOR_OUT`、`PROJECTOR_LEN`、`WORD_LIST`
+
+可以使用 v2 的条件：
+
+- 上游愿意改客户端，按 `[B, T_max]` padding 并传 `WAV_LEN`。
+- 下游能消费 batch 输出，按 `PROJECTOR_LEN[i]` 截断每条 projector。
+- 保持 `packed_audio=false`，不要默认启用 packed Qwen3。
+
+不建议同时在生产加载 v1 和 v2，除非显存足够且确实要并行灰度。当前两个模型会各自加载一份 retriever/基座，显存约翻倍。生产更推荐只加载一个目标模型。
+
+---
+
 ## Triton 目录为什么有 `1/`
 
 `triton/rag_asr_retrieve/` 是 Triton model repository 中的一个模型目录。Triton 要求模型实现放在整数版本目录下：
@@ -59,6 +102,29 @@ triton/
 ```
 
 因此 `1/` 不是业务目录，也不是 Python 包层级；它表示 Triton 模型版本。未来如果输入输出协议发生不兼容变化，可以新增 `2/model.py`，保留 `1/` 用于灰度或回滚。只更换 adapter、词池或路径参数时，通常不需要新增版本，更新 `config.pbtxt` 后重启即可。
+
+---
+
+## 批处理能力
+
+当前服务支持服务内核 micro-batch：`RAGASRRetriever.infer_many()` 可以一次处理多条音频，Triton Python Backend 会把同一次 `execute(requests)` 中的多个 request 聚合后调用 `infer_many()`。
+
+当前未启用 Triton scheduler 原生 dynamic batching：
+
+```text
+max_batch_size: 0
+```
+
+原因是 `WAV` 是变长一维输入。直接打开 `max_batch_size > 0` 会要求客户端和服务端重新约定 padded batch 或 ragged 输入长度元数据。详细验证结果见 `docs/TRITON_INFERENCE_TEST_REPORT.md`。
+
+新增 v2 显式 batch 模型：
+
+- 模型名：`rag_asr_retrieve_v2`
+- 输入：`WAV_BATCH`、`WAV_LEN`、`SAMPLE_RATE`、`TOP_K`
+- 输出：`PROJECTOR_OUT`、`PROJECTOR_LEN`、`WORD_LIST`
+- 默认：`packed_audio=false`，保证与 v1/local 单条推理数值一致
+
+v2 设计与验证见 `docs/TRITON_BATCH_V2_REPORT.md`。
 
 ---
 
