@@ -2,6 +2,29 @@
 
 双塔（audio-text）神经检索，用于 ASR 热词偏置。项目内置 Amphion / Qwen3 ASR 的 HuggingFace backend 代码，不依赖原始源码路径；训练数据、词池和部分权重仍依赖本机或共享盘路径。
 
+## 热词召回流程
+
+```mermaid
+flowchart TD
+    audioInput["整段音频 WAV"] --> fbank["WhisperFbank 特征"]
+    fbank --> audioEncoder["ASR audio encoder"]
+    audioEncoder --> projector["projector 帧级特征"]
+    projector --> audioAdapter["audio adapter + attention pool"]
+    audioAdapter --> audioEmbedding["整句音频检索向量"]
+
+    hotwordPool["热词池文本"] --> tokenizer["tokenizer"]
+    tokenizer --> textEmbeddingTable["冻结 text embedding"]
+    textEmbeddingTable --> textAdapter["text adapter + attention pool"]
+    textAdapter --> hotwordEmbedding["热词检索向量缓存"]
+
+    audioEmbedding --> similarity["向量相似度 top-K"]
+    hotwordEmbedding --> similarity
+    similarity --> wordList["召回热词列表 WORD_LIST"]
+    projector --> projectorOut["PROJECTOR_OUT + PROJECTOR_LEN"]
+    wordList --> downstreamAsr["下游 ASR biasing"]
+    projectorOut --> downstreamAsr
+```
+
 ## 目录
 
 ```
