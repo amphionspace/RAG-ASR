@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-asr"
+version = "0.1.0"
+description = "Dual-tower audio-text retrieval for ASR hotword biasing (RAG-ASR)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "transformers>=4.40",
+    "lhotse>=1.20",
+    "numpy",
+    "soundfile",
+    "torchaudio",
+]
+
+[project.optional-dependencies]
+faiss = ["faiss-cpu"]
+serve = ["fastapi", "uvicorn", "python-multipart"]
+triton = ["tritonclient[http]"]
+all = ["faiss-cpu", "fastapi", "uvicorn", "python-multipart", "tritonclient[http]"]
+dev = ["pytest"]
+
+[project.scripts]
+rag-asr-train = "rag_asr.train:main_entry"
+rag-asr-retrieve = "rag_asr.cli_retrieve:main"
+rag-asr-merge-shards = "rag_asr.cli_merge_hw_maps:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

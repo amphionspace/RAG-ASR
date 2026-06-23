@@ -1,0 +1,15 @@
+torch>=2.0
+transformers>=4.40
+lhotse>=1.20
+numpy
+soundfile
+torchaudio
+
+# Optional but recommended for faster retrieval search:
+# pip install -e ".[faiss]"
+#
+# Optional local HTTP debug service:
+# pip install -e ".[serve]"
+#
+# Optional Triton HTTP client tests:
+# pip install -e ".[triton]"
