@@ -7,6 +7,7 @@ input [
     name: "WAV"
     data_type: TYPE_FP32
     dims: [ -1 ]
+    optional: true
   },
   {
     name: "SAMPLE_RATE"
@@ -16,6 +17,36 @@ input [
   },
   {
     name: "TOP_K"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "ACTION"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "HOTWORDS"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "QUERY"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "LIMIT"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
+  },
+  {
+    name: "OFFSET"
     data_type: TYPE_INT32
     dims: [ 1 ]
     optional: true
@@ -35,6 +66,26 @@ output [
   },
   {
     name: "WORD_LIST"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  },
+  {
+    name: "STATUS"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  },
+  {
+    name: "MESSAGE"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  },
+  {
+    name: "HOTWORD_COUNT"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+  },
+  {
+    name: "HOTWORD_LIST"
     data_type: TYPE_STRING
     dims: [ 1 ]
   }
