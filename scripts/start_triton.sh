@@ -43,6 +43,14 @@ if not rendered.is_absolute():
     rendered = PROJECT_ROOT / rendered
 
 backend_dir = cfg.triton.backend_dir or ""
+python_stub_link = cfg.triton.python_stub_link or ""
+if python_stub_link.lower() in {"", "none", "off"}:
+    python_stub_link = ""
+else:
+    python_stub_path = Path(python_stub_link).expanduser()
+    if not python_stub_path.is_absolute():
+        python_stub_path = PROJECT_ROOT / python_stub_path
+    python_stub_link = str(python_stub_path)
 
 values = {
     "EXEC_ENV": params["EXECUTION_ENV_PATH"],
@@ -58,7 +66,7 @@ values = {
         )
     ),
     "MODEL_REPO_RENDERED": str(rendered),
-    "PYENV_LINK": cfg.triton.python_stub_link,
+    "PYENV_LINK": python_stub_link,
     "TRITON_BACKEND_DIR": backend_dir,
     "TRITON_HTTP_PORT": str(cfg.triton.http_port),
     "TRITON_GRPC_PORT": str(cfg.triton.grpc_port),
@@ -146,9 +154,10 @@ check_port_available "http_port" "$TRITON_HTTP_PORT"
 check_port_available "grpc_port" "$TRITON_GRPC_PORT"
 
 # Triton Python backend stub links libpython built with this prefix (must be Python 3.12).
-if [[ ! -e "$PYENV_LINK" ]] || [[ "$(readlink -f "$PYENV_LINK" 2>/dev/null)" != "$(readlink -f "$EXEC_ENV")" ]]; then
+if [[ -n "$PYENV_LINK" && "$PYENV_LINK" != "none" && "$PYENV_LINK" != "off" ]] && \
+   { [[ ! -e "$PYENV_LINK" ]] || [[ "$(readlink -f "$PYENV_LINK" 2>/dev/null)" != "$(readlink -f "$EXEC_ENV")" ]]; }; then
   echo "Creating pyenv symlink for Triton Python stub: $PYENV_LINK -> $EXEC_ENV"
-  mkdir -p /opt/pyenv_build/versions
+  mkdir -p "$(dirname "$PYENV_LINK")"
   ln -sfn "$EXEC_ENV" "$PYENV_LINK"
 fi
 

@@ -48,11 +48,17 @@ def _minimal_config(tmp_path: Path) -> dict:
 
 def test_load_config_interpolates_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("POOL_PATH", str(tmp_path / "env_pool.txt"))
+    monkeypatch.setenv("EMPTY_PATH", "")
+    monkeypatch.delenv("PYENV_LINK", raising=False)
     data = _minimal_config(tmp_path)
     data["retrieval"]["hotword_pool_file"] = "${POOL_PATH}"
+    data["triton"]["backend_dir"] = "${EMPTY_PATH:-/default/backends}"
+    data["triton"]["python_stub_link"] = "${PYENV_LINK:-/default/pyenv}"
     cfg = load_config(_write_yaml(tmp_path / "serve.yaml", data))
 
     assert cfg.retrieval.hotword_pool_file == str(tmp_path / "env_pool.txt")
+    assert cfg.triton.backend_dir == "/default/backends"
+    assert cfg.triton.python_stub_link == "/default/pyenv"
     assert cfg.to_serve_kwargs()["hotword_pool_file"] == str(tmp_path / "env_pool.txt")
     assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter"
 

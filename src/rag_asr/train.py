@@ -5,12 +5,12 @@ Quick start
 -----------
 python src/retrieval/train_retrieval.py \\
     --base-model-path /path/to/amphion_4b_checkpoint \\
-    --supervisions  /ai_sds_wuzz/DATA_ASR/LHOTSE/LibriSpeech/data/manifests/librispeech_supervisions_train-other-500_hotwords.jsonl.gz \\
-                    /ai_sds_wuzz/DATA_ASR/LHOTSE/LibriSpeech/data/manifests/librispeech_supervisions_train-clean-360_hotwords.jsonl.gz \\
-                    /ai_sds_wuzz/DATA_ASR/LHOTSE/LibriSpeech/data/manifests/librispeech_supervisions_train-clean-100_hotwords.jsonl.gz \\
-    --recordings    /ai_sds_wuzz/DATA_ASR/LHOTSE/LibriSpeech/data/manifests/librispeech_recordings_train-other-500.jsonl.gz \\
-                    /ai_sds_wuzz/DATA_ASR/LHOTSE/LibriSpeech/data/manifests/librispeech_recordings_train-clean-360.jsonl.gz \\
-                    /ai_sds_wuzz/DATA_ASR/LHOTSE/LibriSpeech/data/manifests/librispeech_recordings_train-clean-100.jsonl.gz \\
+    --supervisions  /path/to/manifests/librispeech_supervisions_train-other-500_hotwords.jsonl.gz \\
+                    /path/to/manifests/librispeech_supervisions_train-clean-360_hotwords.jsonl.gz \\
+                    /path/to/manifests/librispeech_supervisions_train-clean-100_hotwords.jsonl.gz \\
+    --recordings    /path/to/manifests/librispeech_recordings_train-other-500.jsonl.gz \\
+                    /path/to/manifests/librispeech_recordings_train-clean-360.jsonl.gz \\
+                    /path/to/manifests/librispeech_recordings_train-clean-100.jsonl.gz \\
     --output-dir    exp/retrieval/amphion_4b_dual_tower \\
     --embed-dim 512 --batch-size 32 --num-negatives 4096 \\
     --lr 3e-4 --epochs 10

@@ -158,15 +158,15 @@ bash scripts/build_triton_exec_env.sh
 
 `configs/serve.yaml` 的 `triton.exec_env` 指向该执行环境；`start_triton.sh` 会把它渲染进运行时 `config.pbtxt`。
 
-### 3. 首次启动前的系统 symlink
+### 3. 首次启动前的 Python stub symlink
 
-Triton 自带的 Python stub 硬编码前缀 `/opt/pyenv_build/versions/3.12.3`。`start_triton.sh` 会自动创建：
+部分 Triton Python stub 会固定查找构建时的 Python 前缀。默认配置兼容常见前缀：
 
 ```text
 /opt/pyenv_build/versions/3.12.3 -> triton-exec
 ```
 
-若手动启动 `tritonserver`，需自行保证该 symlink 存在。
+`start_triton.sh` 会按 `configs/serve.yaml` 中的 `triton.python_stub_link` 自动创建 symlink；可用 `RAG_ASR_TRITON_PYTHON_STUB_LINK` 覆盖，或设为 `off` / `none` 跳过自动创建。若手动启动 `tritonserver`，需自行保证对应 symlink 存在。
 
 ---
 
