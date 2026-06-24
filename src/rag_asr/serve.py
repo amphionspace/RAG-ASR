@@ -23,6 +23,11 @@ from rag_asr.cache import (
 )
 from rag_asr.dataset import tokenise_words
 from rag_asr.hotwords import hotword_dedupe_key, normalize_hotword, normalize_hotwords
+from rag_asr.model_layout import (
+    DEFAULT_HOTWORD_ADAPTER_FILENAME,
+    DEFAULT_HOTWORD_ADAPTER_SUBDIR,
+    resolve_hotword_adapter,
+)
 from rag_asr.model_loader import load_towers
 
 logger = logging.getLogger(__name__)
@@ -31,8 +36,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ServeConfig:
     base_model_path: str
-    adapter_ckpt: str
     hotword_pool_file: str
+    adapter_ckpt: Optional[str] = None
+    adapter_subdir: str = DEFAULT_HOTWORD_ADAPTER_SUBDIR
+    adapter_filename: str = DEFAULT_HOTWORD_ADAPTER_FILENAME
     embed_dim: int = 512
     adapter_hidden_dim: Optional[int] = 512
     default_top_k: int = 50
@@ -63,10 +70,18 @@ class RAGASRRetriever:
         self.cfg = cfg
         self._device = torch.device(cfg.device)
         self._pool_lock = threading.RLock()
+        self.adapter_ckpt = str(
+            resolve_hotword_adapter(
+                cfg.base_model_path,
+                cfg.adapter_ckpt,
+                adapter_subdir=cfg.adapter_subdir,
+                adapter_filename=cfg.adapter_filename,
+            )
+        )
 
         _, self.audio_tower, self.text_tower, self.tokenizer = load_towers(
             cfg.base_model_path,
-            cfg.adapter_ckpt,
+            self.adapter_ckpt,
             embed_dim=cfg.embed_dim,
             adapter_hidden_dim=cfg.adapter_hidden_dim,
             device=self._device,
@@ -92,7 +107,7 @@ class RAGASRRetriever:
             cache_dir = None
         return text_emb_cache_path(
             cache_dir,
-            adapter_ckpt=self.cfg.adapter_ckpt,
+            adapter_ckpt=self.adapter_ckpt,
             hotword_pool_file=self.cfg.hotword_pool_file,
         )
 
@@ -526,8 +541,14 @@ class RAGASRRetriever:
         return cls(
             ServeConfig(
                 base_model_path=params["base_model_path"],
-                adapter_ckpt=params["adapter_ckpt"],
                 hotword_pool_file=params["hotword_pool_file"],
+                adapter_ckpt=params.get("adapter_ckpt") or None,
+                adapter_subdir=params.get(
+                    "adapter_subdir", DEFAULT_HOTWORD_ADAPTER_SUBDIR
+                ),
+                adapter_filename=params.get(
+                    "adapter_filename", DEFAULT_HOTWORD_ADAPTER_FILENAME
+                ),
                 embed_dim=int(params.get("embed_dim", "512")),
                 adapter_hidden_dim=int(params["adapter_hidden_dim"])
                 if params.get("adapter_hidden_dim")

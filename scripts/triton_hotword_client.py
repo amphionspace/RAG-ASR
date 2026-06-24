@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 from typing import Iterable
 
 import numpy as np
@@ -79,13 +80,188 @@ def _management_call(args, action: str, *, words: list[str] | None = None) -> di
         httpclient.InferRequestedOutput("HOTWORD_COUNT"),
         httpclient.InferRequestedOutput("HOTWORD_LIST"),
     ]
-    result = client.infer(MODEL_NAME, inputs, outputs=outputs)
+    result = client.infer(args.model, inputs, outputs=outputs)
     message = json.loads(_decode(result.as_numpy("MESSAGE")[0]))
     hotwords = json.loads(_decode(result.as_numpy("HOTWORD_LIST")[0]))
     message["status"] = _decode(result.as_numpy("STATUS")[0])
     message["hotword_count"] = int(result.as_numpy("HOTWORD_COUNT")[0])
     message["hotwords"] = hotwords
     return message
+
+
+def _safe_call(fn, default=None):
+    try:
+        return fn()
+    except Exception as exc:  # pragma: no cover - status diagnostics
+        return {"error": str(exc)} if default is None else default
+
+
+def _simplify_io(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    simplified = []
+    for item in items or []:
+        shape = item.get("shape")
+        if shape is None:
+            shape = item.get("dims")
+        simplified.append({
+            "name": item.get("name"),
+            "datatype": item.get("datatype") or item.get("data_type"),
+            "shape": shape,
+        })
+    return simplified
+
+
+def _simplify_parameters(params: dict[str, Any] | None) -> dict[str, Any]:
+    out = {}
+    for key, value in (params or {}).items():
+        if isinstance(value, dict) and "string_value" in value:
+            out[key] = value["string_value"]
+        else:
+            out[key] = value
+    return out
+
+
+def _model_config_summary(config: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(config, dict):
+        return {}
+    return {
+        "name": config.get("name"),
+        "backend": config.get("backend"),
+        "max_batch_size": config.get("max_batch_size"),
+        "inputs": _simplify_io(config.get("input")),
+        "outputs": _simplify_io(config.get("output")),
+        "parameters": _simplify_parameters(config.get("parameters")),
+    }
+
+
+def _model_metadata_summary(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, dict):
+        return {}
+    return {
+        "name": metadata.get("name"),
+        "versions": metadata.get("versions"),
+        "platform": metadata.get("platform"),
+        "inputs": _simplify_io(metadata.get("inputs")),
+        "outputs": _simplify_io(metadata.get("outputs")),
+    }
+
+
+def _important_parameters(config: dict[str, Any] | None) -> dict[str, Any]:
+    params = _simplify_parameters(config.get("parameters") if isinstance(config, dict) else {})
+    keys = [
+        "base_model_path",
+        "adapter_subdir",
+        "adapter_filename",
+        "adapter_ckpt",
+        "hotword_pool_file",
+        "cache_dir",
+        "default_top_k",
+        "device",
+        "embed_dim",
+        "adapter_hidden_dim",
+    ]
+    return {key: params[key] for key in keys if key in params and params[key] != ""}
+
+
+def _cmd_status(args) -> dict:
+    import tritonclient.http as httpclient
+
+    client = httpclient.InferenceServerClient(url=args.url)
+    server_live = _safe_call(client.is_server_live, default=False)
+    server_ready = _safe_call(client.is_server_ready, default=False)
+    model_ready = _safe_call(lambda: client.is_model_ready(args.model), default=False)
+    metadata = _safe_call(lambda: client.get_model_metadata(args.model), default={})
+    config = _safe_call(lambda: client.get_model_config(args.model), default={})
+    hotwords = _management_call(args, "list")
+
+    status = {
+        "url": args.url,
+        "model": args.model,
+        "server_live": server_live,
+        "server_ready": server_ready,
+        "model_ready": model_ready,
+        "hotword_pool": {
+            "total_count": hotwords.get("hotword_count"),
+            "matched_count": hotwords.get("matched_count"),
+            "sample_limit": args.limit,
+            "query": args.query,
+            "sample": hotwords.get("hotwords", []),
+        },
+        "parameters": _important_parameters(config),
+    }
+    if args.verbose:
+        status["metadata"] = _model_metadata_summary(metadata)
+        status["config"] = _model_config_summary(config)
+    return status
+
+
+def _format_bool(value: Any) -> str:
+    if value is True:
+        return "OK"
+    if value is False:
+        return "NO"
+    return str(value)
+
+
+def _print_status_text(status: dict[str, Any]) -> None:
+    hotword_pool = status.get("hotword_pool", {}) or {}
+    params = status.get("parameters", {}) or {}
+    sample = hotword_pool.get("sample") or []
+
+    print("RAG-ASR Triton Hotword Service")
+    print("=" * 32)
+    print(f"URL          : {status.get('url')}")
+    print(f"Model        : {status.get('model')}")
+    print(f"Server live  : {_format_bool(status.get('server_live'))}")
+    print(f"Server ready : {_format_bool(status.get('server_ready'))}")
+    print(f"Model ready  : {_format_bool(status.get('model_ready'))}")
+    print()
+    print("Hotword Pool")
+    print("-" * 32)
+    print(f"Total count  : {hotword_pool.get('total_count')}")
+    print(f"Matched count: {hotword_pool.get('matched_count')}")
+    if hotword_pool.get("query"):
+        print(f"Query        : {hotword_pool.get('query')}")
+    print(f"Sample limit : {hotword_pool.get('sample_limit')}")
+    if sample:
+        print("Sample words :")
+        for idx, word in enumerate(sample, start=1):
+            print(f"  {idx:>2}. {word}")
+    else:
+        print("Sample words : <empty>")
+
+    if params:
+        print()
+        print("Key Parameters")
+        print("-" * 32)
+        labels = {
+            "base_model_path": "Base model",
+            "adapter_subdir": "Adapter dir",
+            "adapter_filename": "Adapter file",
+            "adapter_ckpt": "Adapter ckpt",
+            "hotword_pool_file": "Pool file",
+            "cache_dir": "Cache dir",
+            "default_top_k": "Default top_k",
+            "device": "Device",
+            "embed_dim": "Embed dim",
+            "adapter_hidden_dim": "Adapter hidden",
+        }
+        width = max(len(label) for label in labels.values())
+        for key, label in labels.items():
+            if key in params:
+                print(f"{label:<{width}} : {params[key]}")
+
+    if "metadata" in status or "config" in status:
+        print()
+        print("Verbose Schema")
+        print("-" * 32)
+        print(json.dumps(
+            {
+                "metadata": status.get("metadata"),
+                "config": status.get("config"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ))
 
 
 def _cmd_infer(args) -> dict:
@@ -104,7 +280,7 @@ def _cmd_infer(args) -> dict:
         httpclient.InferRequestedOutput("PROJECTOR_LEN"),
         httpclient.InferRequestedOutput("WORD_LIST"),
     ]
-    result = client.infer(MODEL_NAME, inputs, outputs=outputs)
+    result = client.infer(args.model, inputs, outputs=outputs)
     projector_out = result.as_numpy("PROJECTOR_OUT")
     return {
         "word_list": json.loads(_decode(result.as_numpy("WORD_LIST")[0])),
@@ -118,7 +294,20 @@ def main() -> None:
         description="Call rag_asr_retrieve via Triton HTTP"
     )
     parser.add_argument("--url", default="localhost:8000")
+    parser.add_argument("--model", default=MODEL_NAME)
     sub = parser.add_subparsers(dest="command", required=True)
+
+    status_p = sub.add_parser("status", help="show Triton readiness and hotword pool summary")
+    status_p.add_argument("--query", default=None)
+    status_p.add_argument("--limit", type=int, default=10)
+    status_p.add_argument("--offset", type=int, default=0)
+    status_p.add_argument("--verbose", action="store_true", help="include full model I/O schema")
+    status_p.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="json",
+        help="output format; bash wrapper defaults to text",
+    )
 
     infer_p = sub.add_parser("infer", help="retrieve hotwords for one wav")
     infer_p.add_argument("--wav", required=True)
@@ -143,7 +332,9 @@ def main() -> None:
     sub.add_parser("reload", help="reload hotword pool from server-side file")
 
     args = parser.parse_args()
-    if args.command == "infer":
+    if args.command == "status":
+        output = _cmd_status(args)
+    elif args.command == "infer":
         output = _cmd_infer(args)
     elif args.command == "list":
         output = _management_call(args, "list")
@@ -169,7 +360,10 @@ def main() -> None:
         output = _management_call(args, "reload")
     else:
         raise AssertionError(args.command)
-    print(json.dumps(output, ensure_ascii=False, indent=2))
+    if args.command == "status" and args.format == "text":
+        _print_status_text(output)
+    else:
+        print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

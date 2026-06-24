@@ -13,8 +13,6 @@ REPO_SRC = Path(__file__).resolve().parents[3] / "src"
 if REPO_SRC.is_dir():
     sys.path.insert(0, str(REPO_SRC))
 
-from rag_asr.serve import RAGASRRetriever, word_list_json
-
 
 def _decode_string(value) -> str:
     if isinstance(value, bytes):
@@ -80,6 +78,8 @@ def _error_response(message: str) -> pb_utils.InferenceResponse:
 
 class TritonPythonModel:
     def initialize(self, args):
+        from rag_asr.serve import RAGASRRetriever
+
         model_config = json.loads(args["model_config"])
         params = {
             k: v["string_value"]
@@ -155,7 +155,7 @@ class TritonPythonModel:
         )
         out_words = pb_utils.Tensor(
             "WORD_LIST",
-            np.array([word_list_json(result.word_list)], dtype=object),
+            np.array([json.dumps(result.word_list, ensure_ascii=False)], dtype=object),
         )
         return pb_utils.InferenceResponse(
             output_tensors=[out_proj, out_len, out_words]

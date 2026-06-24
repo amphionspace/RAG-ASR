@@ -12,6 +12,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
+from rag_asr.config import load_config
 from rag_asr.serve import RAGASRRetriever, ServeConfig
 
 app = FastAPI(title="RAG-ASR Retrieve")
@@ -56,24 +57,41 @@ async def retrieve(
 
 def main():
     p = argparse.ArgumentParser()
+    p.add_argument("--config", default=None, help="RAG-ASR YAML config path")
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8080)
-    p.add_argument("--base-model-path", required=True)
-    p.add_argument("--adapter-ckpt", required=True)
-    p.add_argument("--hotword-pool-file", required=True)
+    p.add_argument("--base-model-path", default=None)
+    p.add_argument("--adapter-ckpt", default=None)
+    p.add_argument("--hotword-pool-file", default=None)
     p.add_argument("--top-k", type=int, default=50)
-    p.add_argument("--cache-dir", default="_retrieve_cache")
-    p.add_argument("--device", default="cuda")
+    p.add_argument("--cache-dir", default=None)
+    p.add_argument("--device", default=None)
     args = p.parse_args()
 
-    app.state.serve_cfg = ServeConfig(
-        base_model_path=args.base_model_path,
-        adapter_ckpt=args.adapter_ckpt,
-        hotword_pool_file=args.hotword_pool_file,
-        default_top_k=args.top_k,
-        cache_dir=args.cache_dir,
-        device=args.device,
-    )
+    if args.config or not (args.base_model_path and args.hotword_pool_file):
+        kwargs = load_config(args.config).to_serve_kwargs()
+        if args.base_model_path:
+            kwargs["base_model_path"] = args.base_model_path
+        if args.adapter_ckpt:
+            kwargs["adapter_ckpt"] = args.adapter_ckpt
+        if args.hotword_pool_file:
+            kwargs["hotword_pool_file"] = args.hotword_pool_file
+        if args.cache_dir:
+            kwargs["cache_dir"] = args.cache_dir
+        if args.device:
+            kwargs["device"] = args.device
+        if args.top_k:
+            kwargs["default_top_k"] = args.top_k
+        app.state.serve_cfg = ServeConfig(**kwargs)
+    else:
+        app.state.serve_cfg = ServeConfig(
+            base_model_path=args.base_model_path,
+            adapter_ckpt=args.adapter_ckpt,
+            hotword_pool_file=args.hotword_pool_file,
+            default_top_k=args.top_k,
+            cache_dir=args.cache_dir,
+            device=args.device or "cuda",
+        )
     uvicorn.run(app, host=args.host, port=args.port)
 
 
