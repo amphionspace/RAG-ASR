@@ -1,16 +1,42 @@
 #!/usr/bin/env bash
 # Build a conda-packed execution environment for Triton Python backend (Python 3.12).
-# Output: /ai_sds_wuzz/MODELS/triton-exec-env.tar.gz
+# Override output with RAG_ASR_TRITON_EXEC_ENV_TAR when a shared archive is needed.
 # Does NOT modify the existing ``triton`` (vllm-clone) or ``vllm`` environments.
 
 set -euo pipefail
 
-ENV_NAME=triton-exec
-ENV_DIR="$("$CONDA" info --base)/envs/$ENV_NAME"
-OUT_TAR=/ai_sds_wuzz/MODELS/triton-exec-env.tar.gz
 RAG_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONDA=/ai_sds_wuzz/MODELS/miniconda3/bin/conda
+ENV_NAME="${RAG_ASR_TRITON_EXEC_ENV_NAME:-triton-exec}"
+OUT_TAR="${RAG_ASR_TRITON_EXEC_ENV_TAR:-$RAG_ROOT/var/triton-exec-env.tar.gz}"
 ACTIVATE_SRC="$(cd "$(dirname "$0")" && pwd)/triton_exec_activate.sh"
+
+resolve_conda() {
+  if [[ -n "${CONDA_EXE:-}" ]]; then
+    echo "$CONDA_EXE"
+    return
+  fi
+  if command -v conda >/dev/null 2>&1; then
+    command -v conda
+    return
+  fi
+  if [[ -n "${CONDA_PREFIX:-}" ]]; then
+    for candidate in \
+      "$CONDA_PREFIX/bin/conda" \
+      "$CONDA_PREFIX/../bin/conda" \
+      "$CONDA_PREFIX/../../bin/conda"; do
+      if [[ -x "$candidate" ]]; then
+        echo "$candidate"
+        return
+      fi
+    done
+  fi
+
+  echo "ERROR: conda is not available. Set CONDA=/path/to/conda." >&2
+  exit 1
+}
+
+CONDA="${CONDA:-$(resolve_conda)}"
+ENV_DIR="$("$CONDA" info --base)/envs/$ENV_NAME"
 
 env_exists() {
   "$CONDA" env list | awk '{print $1}' | grep -qx "$ENV_NAME"
@@ -49,6 +75,7 @@ echo "Restoring conda-managed pip/setuptools ..."
 "$CONDA" install -n "$ENV_NAME" pip setuptools -y --force-reinstall
 
 echo "Packing environment -> $OUT_TAR"
+mkdir -p "$(dirname "$OUT_TAR")"
 rm -f "$OUT_TAR"
 "$CONDA" run -n "$ENV_NAME" conda-pack -o "$OUT_TAR"
 

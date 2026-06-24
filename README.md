@@ -60,6 +60,29 @@ pip install -e ".[serve]"   # 可选，本地 HTTP 调试服务
 
 默认配置使用 `examples/hotword_pool.txt` 作为可启动的示例热词库。部署到真实业务时，按实际路径修改 `configs/serve.yaml` 中的模型目录、词池和 Triton 执行环境。
 
+## 新机器部署
+
+新机器上需要先确认三类路径：项目内模型权重、外部数据盘、Triton 运行环境。项目内默认模型目录是 `checkpoints/base/amphion_1.7b_merged`，可用软链接指向真实权重；外部训练和评测数据不随仓库分发，需要通过环境变量传入。
+
+最小服务启动流程：
+
+```bash
+cd RAG-ASR
+pip install -e ".[serve]"
+
+# 可选：如果模型或热词库不在默认位置，按机器实际路径覆盖。
+export RAG_ASR_BASE_MODEL=/path/to/amphion_1.7b_merged
+export RAG_ASR_HOTWORD_POOL=/path/to/hotword_pool.txt
+
+# 构建 Triton Python backend 执行环境；conda 会自动从当前环境或 PATH 中发现。
+bash scripts/build_triton_exec_env.sh
+
+# 按需修改 configs/serve.yaml 后启动。
+bash scripts/start_triton.sh
+```
+
+离线推理或训练还需要设置外部数据根目录，例如 `RAG_ASR_DATA_ROOT=/path/to/DATA_ASR` 和 `RAG_ASR_HOTWORD_ROOT=/path/to/hotword`；目录结构不一致时用更细粒度的 `RAG_ASR_*_DIR` 变量覆盖。完整变量说明见 [docs/SCRIPTS.md](docs/SCRIPTS.md)，Triton 执行环境和 Python stub symlink 说明见 [docs/SERVICE.md](docs/SERVICE.md)。
+
 ## 最少入口
 
 日常使用优先只看这 4 个入口：

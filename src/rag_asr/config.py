@@ -18,13 +18,21 @@ from rag_asr.model_layout import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "serve.yaml"
-_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 T = TypeVar("T")
+
+
+def _replace_env_ref(match: re.Match[str]) -> str:
+    name, default = match.groups()
+    value = os.getenv(name)
+    if default is not None and not value:
+        return default
+    return value or ""
 
 
 def _interpolate_env(value: Any) -> Any:
     if isinstance(value, str):
-        return _ENV_REF.sub(lambda m: os.getenv(m.group(1), ""), value)
+        return _ENV_REF.sub(_replace_env_ref, value)
     if isinstance(value, dict):
         return {k: _interpolate_env(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -97,7 +105,7 @@ class TritonConfig:
     rendered_model_repo: str = "var/triton_repo"
     exec_env: str = "${CONDA_PREFIX}/../triton-exec"
     backend_dir: Optional[str] = None
-    python_stub_link: str = "/opt/pyenv_build/versions/3.12.3"
+    python_stub_link: str = "off"
     http_port: int = 8000
     grpc_port: int = 8001
 

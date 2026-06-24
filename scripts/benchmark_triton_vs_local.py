@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import json
 import statistics
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ import soundfile as sf
 import tritonclient.http as httpclient
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
 
 def _percentile(values: list[float], pct: float) -> float:
@@ -105,7 +107,13 @@ def _compare_result(lhs: dict[str, Any], rhs: dict[str, Any]) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="localhost:8000")
+    parser.add_argument("--config", default=None, help="RAG-ASR YAML config path")
     parser.add_argument("--examples-dir", type=Path, default=ROOT / "examples")
+    parser.add_argument("--base-model-path", default=None)
+    parser.add_argument("--adapter-ckpt", default=None)
+    parser.add_argument("--hotword-pool-file", default=None)
+    parser.add_argument("--cache-dir", default=None)
+    parser.add_argument("--device", default=None)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--pressure-concurrency", nargs="+", type=int, default=[1, 2, 4])
@@ -113,6 +121,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=1)
     args = parser.parse_args()
 
+    from rag_asr.config import load_config
     from rag_asr.serve import RAGASRRetriever, ServeConfig
 
     examples_dir = args.examples_dir.resolve()
@@ -124,18 +133,17 @@ def main() -> None:
         wavs.append(wav)
         sample_rates.append(sr)
 
-    cfg = ServeConfig(
-        base_model_path=str(ROOT / "checkpoints/base/amphion_1.7b_merged"),
-        adapter_ckpt=str(
-            ROOT / "checkpoints/adapters/amphion-1.7b_retrieval_v1.2/best_adapter.pt"
-        ),
-        hotword_pool_file="/chenmingjie/lx/data/hotword/zh/zh-10k.txt",
-        embed_dim=512,
-        adapter_hidden_dim=512,
-        default_top_k=args.top_k,
-        cache_dir=str(ROOT / "_retrieve_cache"),
-        device="cuda",
-    )
+    serve_kwargs = load_config(args.config).to_serve_kwargs()
+    overrides = {
+        "base_model_path": args.base_model_path,
+        "adapter_ckpt": args.adapter_ckpt,
+        "hotword_pool_file": args.hotword_pool_file,
+        "cache_dir": args.cache_dir,
+        "device": args.device,
+    }
+    serve_kwargs.update({key: value for key, value in overrides.items() if value})
+    serve_kwargs["default_top_k"] = args.top_k
+    cfg = ServeConfig(**serve_kwargs)
     local = RAGASRRetriever(cfg)
     triton_client = httpclient.InferenceServerClient(url=args.url)
     if not triton_client.is_server_ready() or not triton_client.is_model_ready("rag_asr_retrieve"):
