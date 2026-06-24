@@ -13,6 +13,7 @@ dependencies = [
     "transformers>=4.40",
     "lhotse>=1.20",
     "numpy",
+    "PyYAML",
     "soundfile",
     "torchaudio",
 ]
@@ -28,6 +29,7 @@ dev = ["pytest"]
 rag-asr-train = "rag_asr.train:main_entry"
 rag-asr-retrieve = "rag_asr.cli_retrieve:main"
 rag-asr-merge-shards = "rag_asr.cli_merge_hw_maps:main"
+rag-asr-triton-config = "rag_asr.cli_triton_config:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

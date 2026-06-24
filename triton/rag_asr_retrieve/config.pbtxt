@@ -102,19 +102,23 @@ instance_group [
 
 parameters: {
   key: "EXECUTION_ENV_PATH"
-  value: { string_value: "/ai_sds_wuzz/MODELS/miniconda3/envs/triton-exec" }
+  value: { string_value: "${RAG_ASR_TRITON_EXEC_ENV}" }
 }
 parameters: {
   key: "base_model_path"
-  value: { string_value: "/chenmingjie/lx/RAG-ASR/checkpoints/base/amphion_1.7b_merged" }
+  value: { string_value: "checkpoints/base/amphion_1.7b_merged" }
 }
 parameters: {
-  key: "adapter_ckpt"
-  value: { string_value: "/chenmingjie/lx/RAG-ASR/checkpoints/adapters/amphion-1.7b_retrieval_v1.2/best_adapter.pt" }
+  key: "adapter_subdir"
+  value: { string_value: "hotword_adapter" }
+}
+parameters: {
+  key: "adapter_filename"
+  value: { string_value: "best_adapter.pt" }
 }
 parameters: {
   key: "hotword_pool_file"
-  value: { string_value: "/chenmingjie/lx/data/hotword/zh/zh-10k.txt" }
+  value: { string_value: "${RAG_ASR_HOTWORD_POOL}" }
 }
 parameters: {
   key: "embed_dim"
@@ -130,7 +134,7 @@ parameters: {
 }
 parameters: {
   key: "cache_dir"
-  value: { string_value: "/chenmingjie/lx/RAG-ASR/_retrieve_cache" }
+  value: { string_value: "var/retrieve_cache" }
 }
 parameters: {
   key: "device"

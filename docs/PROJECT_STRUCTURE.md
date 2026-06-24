@@ -41,7 +41,7 @@ triton/
 ## 推荐演进顺序
 
 1. 保持当前 `src/`、`scripts/`、`triton/` 三层可运行结构。
-2. 把本机路径集中到 `configs/serve.env`，减少 `config.pbtxt`、`serve_http.sh`、`infer.sh` 之间的漂移。
+2. 把本机路径集中到 `configs/serve.yaml`，减少 `config.pbtxt`、`serve_http.sh`、`infer.sh` 之间的漂移。
 3. 将运行产物逐步收敛到 `var/`，例如 `var/cache/` 和 `var/exp/`。
 4. 按生命周期拆分脚本目录：`scripts/train/`、`scripts/infer/`、`scripts/serve/`、`scripts/env/`。
 5. 在服务稳定后，再考虑把 `triton/` 整体迁到 `deployments/triton/`。

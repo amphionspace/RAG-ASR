@@ -15,5 +15,4 @@ var/
 *.npz
 *.lock
 _retrieve_cache/
-configs/serve.env
 .DS_Store

@@ -13,8 +13,6 @@ REPO_SRC = Path(__file__).resolve().parents[3] / "src"
 if REPO_SRC.is_dir():
     sys.path.insert(0, str(REPO_SRC))
 
-from rag_asr.serve import RAGASRRetriever, word_list_json
-
 
 def _optional_vector(request, name: str) -> list[int] | None:
     tensor = pb_utils.get_input_tensor_by_name(request, name)
@@ -25,6 +23,8 @@ def _optional_vector(request, name: str) -> list[int] | None:
 
 class TritonPythonModel:
     def initialize(self, args):
+        from rag_asr.serve import RAGASRRetriever
+
         model_config = json.loads(args["model_config"])
         params = {
             k: v["string_value"]
@@ -71,7 +71,7 @@ class TritonPythonModel:
             for i, result in enumerate(results):
                 projector_out[i, : result.projector_len, :] = result.projector_out
                 projector_len[i] = result.projector_len
-                word_list[i] = word_list_json(result.word_list)
+                word_list[i] = json.dumps(result.word_list, ensure_ascii=False)
 
             responses.append(
                 pb_utils.InferenceResponse(
