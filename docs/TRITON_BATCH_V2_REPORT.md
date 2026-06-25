@@ -96,7 +96,7 @@ Qwen3 packed 实验路径：`packed_audio=true`
 source /ai_sds_wuzz/MODELS/miniconda3/etc/profile.d/conda.sh
 conda activate triton
 CUDA_VISIBLE_DEVICES=1 PYTHONPATH=/chenmingjie/lx/RAG-ASR/src \
-  python scripts/benchmark_triton_v2_batch.py \
+  python evaluation/benchmark_triton_v2_batch.py \
   --url localhost:8000 \
   --batch-sizes 1 2 4 8 16 \
   --repeats 5 \

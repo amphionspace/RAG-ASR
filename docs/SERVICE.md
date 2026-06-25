@@ -299,7 +299,7 @@ bash scripts/serve_http.sh
 
 ```bash
 conda activate triton
-python scripts/triton_client_test.py \
+python examples/triton_client_example.py \
   --wav examples/audio/cv_zh_33411896.wav \
   --url localhost:8000 \
   --top-k 50
@@ -308,7 +308,7 @@ python scripts/triton_client_test.py \
 对 `examples/` 全集做召回评测：
 
 ```bash
-python scripts/test_triton_examples.py --url localhost:8000
+python examples/triton_recall_check.py --url localhost:8000
 ```
 
 热词库管理与检索统一客户端：

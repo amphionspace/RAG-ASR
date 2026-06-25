@@ -14,14 +14,16 @@
 
 ```text
 RAG-ASR/
-├── src/rag_asr/       # Python 包：模型、训练、推理、服务核心
-├── scripts/           # Shell 和 CLI 脚本：训练、推理、服务启动、测试
+├── src/rag_asr/       # Python 包：模型、训练、推理、服务核心（可复用、可单测）
+├── scripts/           # shell 运维入口：训练、推理、服务启动、环境构建、本地调试
+├── examples/          # 可运行示例、冒烟脚本与示例数据（依赖在线服务）
+├── evaluation/        # 数据集级离线评测与压测（依赖在线服务，产物入 var/）
+├── tests/             # 纯 pytest 单测（无网络、无本机服务依赖）
 ├── triton/            # Triton model repository
 ├── docs/              # 文档
-├── examples/          # 冒烟测试样例
 ├── checkpoints/       # 权重说明和本机权重入口
 ├── configs/           # 本机配置模板
-└── exp/, build/       # 本地生成物，已忽略
+└── exp/, build/, var/ # 本地生成物，已忽略
 ```
 
 ## Triton 目录规则
@@ -40,10 +42,10 @@ triton/
 
 ## 推荐演进顺序
 
-1. 保持当前 `src/`、`scripts/`、`triton/` 三层可运行结构。
+1. 已落地：按职责分出 `examples/`(示例与冒烟)、`evaluation/`(数据集评测压测)、`tests/`(单测)，`scripts/` 收敛为 shell 运维入口；公共逻辑入 `src/rag_asr/`（如 `vllm_bypass.py`）。
 2. 把本机路径集中到 `configs/serve.yaml`，减少 `config.pbtxt`、`serve_http.sh`、`infer.sh` 之间的漂移。
-3. 将运行产物逐步收敛到 `var/`，例如 `var/cache/` 和 `var/exp/`。
-4. 按生命周期拆分脚本目录：`scripts/train/`、`scripts/infer/`、`scripts/serve/`、`scripts/env/`。
+3. 将运行产物逐步收敛到 `var/`，例如 `var/cache/`、`var/exp/` 和 `var/benchmarks/`。
+4. 把 `retrieve.py` 内收到 `src/rag_asr/cli_retrieve.py`，让 `rag-asr-retrieve` 不再 runpy 脚本；`merge_hw_maps.py` 等兼容入口在 `infer.sh` 改用 console script 后再删除。
 5. 在服务稳定后，再考虑把 `triton/` 整体迁到 `deployments/triton/`。
 6. 最后拆分 Python 包内部大文件，例如 `dual_tower.py`、`infer.py` 和 `train.py`。
 

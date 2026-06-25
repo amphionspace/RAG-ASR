@@ -32,7 +32,9 @@ RAG-ASR/
 ├── configs/               # 服务配置模板（复制为 serve.yaml 后按环境修改）
 ├── checkpoints/           # 基座 + adapter 权重说明；大权重可用软链接
 ├── docs/                  # 服务与项目组织文档
-├── examples/              # Triton / HTTP 冒烟测试样例
+├── examples/              # 可运行示例、冒烟脚本与示例数据（见 examples/README.md）
+├── evaluation/            # 数据集级离线评测与压测（见 evaluation/README.md）
+├── tests/                 # 纯 pytest 单测（无网络、无本机服务依赖）
 ├── src/rag_asr/           # 可安装 Python 包
 │   ├── backends/          # Amphion / Qwen3 HF 模型代码（内置）
 │   ├── dual_tower.py      # 双塔、adapter、pooling、loss
@@ -40,9 +42,10 @@ RAG-ASR/
 │   ├── infer.py           # 离线批量检索与 recall 输出
 │   ├── serve.py           # 在线服务核心 RAGASRRetriever
 │   ├── model_loader.py    # backend 注册、基座和 adapter 加载
+│   ├── vllm_bypass.py     # vLLM encoder bypass 协议与客户端
 │   ├── train.py           # DDP 训练入口
 │   └── eval_biasing.py    # biasing TSV 评测
-├── scripts/               # 训练、离线推理、服务启动和测试脚本
+├── scripts/               # shell 运维入口：训练、离线推理、服务启动、环境构建
 └── triton/                # Triton model repository
     └── rag_asr_retrieve/
         ├── config.pbtxt
@@ -94,7 +97,7 @@ bash scripts/start_triton.sh
 - `bash scripts/infer.sh`：离线批量检索，用于数据集评测或生成 `hw_map`。
 - `bash scripts/train_retrieval.sh`：训练双塔检索 adapter。
 
-其他 `scripts/` 下的脚本主要用于冒烟测试、压测、兼容入口或环境构建；普通使用不需要先理解它们。脚本索引见 [docs/SCRIPTS.md](docs/SCRIPTS.md)，在线服务细节见 [docs/SERVICE.md](docs/SERVICE.md)。
+其他 `scripts/` 下的脚本主要用于环境构建、兼容入口或本地调试；可运行示例与冒烟脚本在 `examples/`，数据集级评测与压测在 `evaluation/`。脚本索引见 [docs/SCRIPTS.md](docs/SCRIPTS.md)，在线服务细节见 [docs/SERVICE.md](docs/SERVICE.md)。
 
 ## 在线服务
 
@@ -119,7 +122,7 @@ python scripts/triton_hotword_client.py --url localhost:8000 infer --wav audio.w
 验证 vLLM encoder bypass 路径时，vLLM 需要以 `--enable-mm-embeds` 启动：
 
 ```bash
-python scripts/test_vllm_encoder_bypass.py \
+python examples/vllm_encoder_bypass.py \
   --vllm-url http://localhost:8009 \
   --triton-url localhost:8000 \
   --wav examples/audio/cv_zh_33411896.wav

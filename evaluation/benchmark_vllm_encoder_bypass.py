@@ -16,16 +16,19 @@ from typing import Any, Iterable
 import numpy as np
 import requests
 
-from test_vllm_encoder_bypass import (
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from rag_asr.vllm_bypass import (  # noqa: E402
     TritonProjectorClient,
-    _normalize_triton_url,
-    _normalize_vllm_url,
     audio_embeds_block,
     build_messages,
     call_chat_completions,
     discover_vllm_model,
     input_audio_block,
     load_audio,
+    normalize_triton_url,
+    normalize_vllm_url,
     stable_embed_uuid,
 )
 
@@ -368,8 +371,8 @@ def main() -> None:
 
     dataset_root = args.dataset.resolve()
     metadata_path = args.metadata or (dataset_root / "metadata.jsonl")
-    vllm_url = _normalize_vllm_url(args.vllm_url)
-    triton_url = _normalize_triton_url(args.triton_url)
+    vllm_url = normalize_vllm_url(args.vllm_url)
+    triton_url = normalize_triton_url(args.triton_url)
     model = discover_vllm_model(vllm_url, args.model)
     triton = TritonProjectorClient(triton_url, args.triton_model)
 

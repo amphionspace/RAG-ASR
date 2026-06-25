@@ -1,19 +1,27 @@
-#!/usr/bin/env python3
-"""Validate vLLM audio-encoder bypass with Triton projector outputs.
+"""Shared protocol helpers for the vLLM audio-encoder bypass.
 
-The script runs two requests with the same prompt:
+Two callers build on the exact same wire protocol:
 
-1. baseline: vLLM receives OpenAI ``input_audio`` and runs its own encoder.
+1. baseline: vLLM receives an OpenAI ``input_audio`` block and runs its own
+   audio encoder.
 2. bypass: Triton produces ``PROJECTOR_OUT[:PROJECTOR_LEN]`` and vLLM receives
    that tensor as an ``audio_embeds`` content block.
 
+The single-sample example (``examples/vllm_encoder_bypass.py``) and the batch
+evaluation (``evaluation/benchmark_vllm_encoder_bypass.py``) import the helpers
+below so the protocol lives in one place.
+
 The bypass request requires the vLLM service to be started with
 ``--enable-mm-embeds`` and a model/plugin that accepts ``audio_embeds``.
+
+Heavy or optional dependencies (tritonclient, torch, vllm, librosa) are imported
+lazily inside the functions that need them. Importing this module only requires
+numpy, soundfile and requests, so it never forces the Triton/vLLM client stack
+onto the core package.
 """
 
 from __future__ import annotations
 
-import argparse
 import base64
 import hashlib
 import io
@@ -29,8 +37,6 @@ import requests
 import soundfile as sf
 
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_WAV = ROOT / "examples" / "audio" / "cv_zh_33411896.wav"
 DEFAULT_TRITON_MODEL = "rag_asr_retrieve"
 
 
@@ -51,14 +57,14 @@ def _decode(value: Any) -> str:
     return str(value)
 
 
-def _normalize_vllm_url(value: str) -> str:
+def normalize_vllm_url(value: str) -> str:
     value = value.strip().rstrip("/")
     if not value.startswith(("http://", "https://")):
         value = f"http://{value}"
     return value
 
 
-def _normalize_triton_url(value: str) -> str:
+def normalize_triton_url(value: str) -> str:
     value = value.strip().rstrip("/")
     parsed = urlparse(value if "://" in value else f"http://{value}")
     return parsed.netloc or parsed.path
@@ -167,7 +173,7 @@ def stable_embed_uuid(audio_b64: str) -> str:
 
 
 class TritonProjectorClient:
-    def __init__(self, url: str, model_name: str):
+    def __init__(self, url: str, model_name: str = DEFAULT_TRITON_MODEL):
         import tritonclient.http as httpclient
 
         self._httpclient = httpclient
@@ -235,112 +241,3 @@ def call_chat_completions(
         data["choices"][0]["message"]["content"],
         data.get("usage", {}) or {},
     )
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Compare vLLM raw-audio encoder path with Triton audio_embeds bypass."
-    )
-    parser.add_argument("--wav", type=Path, default=DEFAULT_WAV)
-    parser.add_argument("--vllm-url", default="http://localhost:8009")
-    parser.add_argument("--model", default=None, help="vLLM served model id; autodetect if omitted")
-    parser.add_argument("--triton-url", default="localhost:8000")
-    parser.add_argument("--triton-model", default=DEFAULT_TRITON_MODEL)
-    parser.add_argument("--triton-top-k", type=int, default=0)
-    parser.add_argument("--prompt-style", choices=["qwen3_asr", "swift"], default="qwen3_asr")
-    parser.add_argument("--language", default="zh-cn", help="Used only by --prompt-style swift")
-    parser.add_argument("--hotwords", nargs="*", default=[])
-    parser.add_argument("--use-retrieved-hotwords", action="store_true")
-    parser.add_argument("--max-tokens", type=int, default=120)
-    parser.add_argument("--skip-baseline", action="store_true")
-    args = parser.parse_args()
-
-    vllm_url = _normalize_vllm_url(args.vllm_url)
-    triton_url = _normalize_triton_url(args.triton_url)
-    model = discover_vllm_model(vllm_url, args.model)
-
-    audio, sample_rate, audio_b64 = load_audio(args.wav)
-    triton = TritonProjectorClient(triton_url, args.triton_model)
-
-    t0 = time.perf_counter()
-    embedding = triton.infer(audio, sample_rate, top_k=args.triton_top_k)
-    triton_latency_ms = (time.perf_counter() - t0) * 1000.0
-
-    hotwords = list(args.hotwords)
-    if args.use_retrieved_hotwords:
-        hotwords.extend(embedding.word_list)
-
-    baseline = None
-    if not args.skip_baseline:
-        baseline_messages = build_messages(
-            input_audio_block(audio_b64),
-            prompt_style=args.prompt_style,
-            hotwords=hotwords,
-            language=args.language,
-        )
-        latency_ms, text, usage = call_chat_completions(
-            vllm_url=vllm_url,
-            model=model,
-            messages=baseline_messages,
-            max_tokens=args.max_tokens,
-        )
-        baseline = {"latency_ms": latency_ms, "text": text, "usage": usage}
-
-    bypass_messages = build_messages(
-        audio_embeds_block(embedding.frames, uuid=stable_embed_uuid(audio_b64)),
-        prompt_style=args.prompt_style,
-        hotwords=hotwords,
-        language=args.language,
-    )
-    bypass_latency_ms, bypass_text, bypass_usage = call_chat_completions(
-        vllm_url=vllm_url,
-        model=model,
-        messages=bypass_messages,
-        max_tokens=args.max_tokens,
-    )
-
-    report = {
-        "vllm_url": vllm_url,
-        "model": model,
-        "triton_url": triton_url,
-        "triton_model": args.triton_model,
-        "wav": str(args.wav),
-        "sample_rate": sample_rate,
-        "prompt_style": args.prompt_style,
-        "projector": {
-            "latency_ms": round(triton_latency_ms, 2),
-            "projector_len": embedding.projector_len,
-            "projector_out_shape": list(embedding.projector_out.shape),
-            "frames_shape": list(embedding.frames.shape),
-            "retrieved_words": embedding.word_list,
-        },
-        "baseline_vllm_encoder": None
-        if baseline is None
-        else {
-            "latency_ms": round(baseline["latency_ms"], 2),
-            "text": baseline["text"],
-            "usage": baseline["usage"],
-        },
-        "bypass_triton_encoder": {
-            "latency_ms": round(bypass_latency_ms, 2),
-            "text": bypass_text,
-            "usage": bypass_usage,
-        },
-    }
-    if baseline is not None:
-        report["comparison"] = {
-            "text_equal": baseline["text"] == bypass_text,
-            "bypass_minus_baseline_vllm_ms": round(
-                bypass_latency_ms - float(baseline["latency_ms"]), 2
-            ),
-            "triton_plus_bypass_minus_baseline_ms": round(
-                triton_latency_ms + bypass_latency_ms - float(baseline["latency_ms"]),
-                2,
-            ),
-        }
-
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-
-
-if __name__ == "__main__":
-    main()

@@ -22,7 +22,8 @@ dependencies = [
 faiss = ["faiss-cpu"]
 serve = ["fastapi", "uvicorn", "python-multipart"]
 triton = ["tritonclient[http]"]
-all = ["faiss-cpu", "fastapi", "uvicorn", "python-multipart", "tritonclient[http]"]
+eval = ["requests", "librosa"]
+all = ["faiss-cpu", "fastapi", "uvicorn", "python-multipart", "tritonclient[http]", "requests", "librosa"]
 dev = ["pytest"]
 
 [project.scripts]
@@ -33,3 +34,9 @@ rag-asr-triton-config = "rag_asr.cli_triton_config:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Only unit tests live in tests/. examples/ and evaluation/ are runnable scripts
+# that need live services, and var/ holds local artifacts; none should be
+# collected as tests.
+testpaths = ["tests"]

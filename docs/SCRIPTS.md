@@ -43,7 +43,7 @@
 
 `scripts/train_retrieval.sh` 使用 `RAG_ASR_DATA_ROOT` 推导各训练语料 manifest 目录；目录不一致时可分别设置 `RAG_ASR_TRAIN_V1`、`RAG_ASR_CV_EN_HOTWORD_DIR`、`RAG_ASR_CV_ZH_HOTWORD_DIR`、`RAG_ASR_GIGASPEECH_HOTWORD_DIR`、`RAG_ASR_AISHELL_HOTWORD_DIR`、`RAG_ASR_AISHELL2_HOTWORD_DIR`、`RAG_ASR_AISHELL3_HOTWORD_DIR`、`RAG_ASR_MAGICDATA_HOTWORD_DIR`、`RAG_ASR_THCHS30_HOTWORD_DIR`、`RAG_ASR_ZHVOICE_HOTWORD_DIR`。训练卡数默认从 `CUDA_VISIBLE_DEVICES` 推导，可用 `RAG_ASR_NUM_GPUS` 覆盖。
 
-压测脚本默认读取 `configs/serve.yaml` 或 `RAG_ASR_CONFIG`，并提供 `--config`、`--base-model-path`、`--adapter-ckpt`、`--hotword-pool-file`、`--cache-dir`、`--device` 做临时覆盖。
+`evaluation/` 下的压测脚本默认读取 `configs/serve.yaml` 或 `RAG_ASR_CONFIG`，并提供 `--config`、`--base-model-path`、`--adapter-ckpt`、`--hotword-pool-file`、`--cache-dir`、`--device` 做临时覆盖。
 
 ## 调试入口
 
@@ -61,23 +61,35 @@
 
 ## 冒烟测试和示例
 
-| 脚本 | 语义 |
-|------|------|
-| `scripts/triton_client_test.py` | v1 Triton 单条音频最小调用；功能已被 `triton_hotword_client.py infer` 覆盖 |
-| `scripts/triton_v2_client_test.py` | v2 显式 batch 协议示例 |
-| `scripts/test_triton_examples.py` | 对 `examples/` 样例做 Triton 端到端 recall 验证 |
-| `scripts/test_vllm_encoder_bypass.py` | 对比 vLLM 原始 audio encoder 路径与 Triton `PROJECTOR_OUT` → vLLM `audio_embeds` bypass 路径 |
-
-## 压测和对比
+冒烟脚本与可运行示例在 [examples/](../examples)，详见 [examples/README.md](../examples/README.md)：
 
 | 脚本 | 语义 |
 |------|------|
-| `scripts/benchmark_triton_vs_local.py` | v1 Triton 与本地 Python 的一致性和时延对比 |
-| `scripts/benchmark_triton_v2_batch.py` | v2 batch 协议压测 |
+| `examples/triton_client_example.py` | v1 Triton 单条音频最小调用；功能已被 `triton_hotword_client.py infer` 覆盖 |
+| `examples/triton_v2_batch_example.py` | v2 显式 batch 协议示例 |
+| `examples/triton_recall_check.py` | 对 `examples/` 样例做 Triton 端到端 recall 验证 |
+| `examples/vllm_encoder_bypass.py` | 单条音频对比 vLLM 原始 encoder 与 Triton `PROJECTOR_OUT` → vLLM `audio_embeds` bypass |
+
+## 数据集级评测和压测
+
+评测与压测在 [evaluation/](../evaluation)，详见 [evaluation/README.md](../evaluation/README.md)；公共 bypass 协议在 `src/rag_asr/vllm_bypass.py`：
+
+| 脚本 | 语义 |
+|------|------|
+| `evaluation/benchmark_vllm_encoder_bypass.py` | 批量对比纯 vLLM encoder 与 Triton bypass 的 CER 与时延 |
+| `evaluation/benchmark_triton_vs_local.py` | v1 Triton 与本地 Python 的一致性和时延对比 |
+| `evaluation/benchmark_triton_v2_batch.py` | v2 batch 协议压测 |
+
+## 目录分层约定
+
+- `scripts/`：shell 运维入口与其薄实现/兼容垫片（训练、离线推理、服务启动、环境构建、本地调试）。
+- `src/rag_asr/`：可安装、可复用、可单测的库逻辑。
+- `examples/`：可独立运行的最小示例与冒烟脚本，以及示例数据；依赖在线服务。
+- `evaluation/`：数据集级离线评测与压测，产物写到 `var/`；依赖在线服务。
+- `tests/`：纯 pytest 单测，无网络、无本机服务依赖。
 
 ## 后续整理方向
 
-- 冒烟测试脚本可迁到 `examples/`。
-- 压测脚本可迁到 `tools/benchmark/`。
+- examples/ 与 evaluation/ 分层已落地；冒烟/示例脚本不再以 `test_` 前缀命名，避免被 pytest 误收集。
 - `retrieve.py` 适合逐步内收到 `src/rag_asr/cli_retrieve.py`，让 `rag-asr-retrieve` 不再依赖脚本路径。
 - `merge_hw_maps.py` 等兼容入口等 `infer.sh` 完全改用 console script 后再移动或删除。

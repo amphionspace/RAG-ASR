@@ -16,7 +16,7 @@
 2. `RAGASRRetriever.infer()` 保持单条接口兼容，内部调用 `infer_many()`。
 3. `triton/rag_asr_retrieve/1/model.py` 在一次 `execute(requests)` 中收集所有 request，调用一次 `infer_many()`，再按原顺序返回 `InferenceResponse`。
 4. Triton backend 优先把当前仓库 `src/` 加入 `sys.path`，避免 `triton-exec` 中非 editable 安装的旧 `rag-asr` 包覆盖源码修改。
-5. 新增 `scripts/benchmark_triton_vs_local.py`，统一执行精度一致性、时延测试和小规模并发压测。
+5. 新增 `evaluation/benchmark_triton_vs_local.py`，统一执行精度一致性、时延测试和小规模并发压测。
 
 ## 测试环境
 
@@ -46,7 +46,7 @@ CUDA_VISIBLE_DEVICES=1 bash scripts/start_triton.sh
 source /ai_sds_wuzz/MODELS/miniconda3/etc/profile.d/conda.sh
 conda activate triton
 CUDA_VISIBLE_DEVICES=1 PYTHONPATH=/chenmingjie/lx/RAG-ASR/src \
-  python scripts/benchmark_triton_vs_local.py \
+  python evaluation/benchmark_triton_vs_local.py \
   --url localhost:8000 \
   --pressure-concurrency 1 2 4 \
   --pressure-requests 8 \
