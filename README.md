@@ -62,7 +62,7 @@ pip install -e ".[serve]"   # 可选，本地 HTTP 调试服务
 
 ## 新机器部署
 
-新机器上需要先确认三类路径：项目内模型权重、外部数据盘、Triton 运行环境。项目内默认模型目录是 `checkpoints/base/amphion_1.7b_merged`，可用软链接指向真实权重；外部训练和评测数据不随仓库分发，需要通过环境变量传入。
+新机器上需要先确认三类路径：项目内模型权重、外部数据盘、Triton 运行环境。服务部署只维护一个配置入口：`configs/serve.yaml`。项目内默认模型目录是 `checkpoints/base/amphion_1.7b_merged`，可用软链接指向真实权重；外部训练和评测数据不随仓库分发，需要通过环境变量传入。
 
 最小服务启动流程：
 
@@ -70,12 +70,14 @@ pip install -e ".[serve]"   # 可选，本地 HTTP 调试服务
 cd RAG-ASR
 pip install -e ".[serve]"
 
-# 可选：如果模型或热词库不在默认位置，按机器实际路径覆盖。
-export RAG_ASR_BASE_MODEL=/path/to/amphion_1.7b_merged
-export RAG_ASR_HOTWORD_POOL=/path/to/hotword_pool.txt
+# 如果模型或热词库不在默认位置，先修改 configs/serve.yaml。
+# 需要先准备官方 Triton server 本体；见 docs/SERVICE.md 的“安装官方 Triton server 本体”。
 
-# 构建 Triton Python backend 执行环境；conda 会自动从当前环境或 PATH 中发现。
-bash scripts/build_triton_exec_env.sh
+# 首次创建 Triton server 环境和 Python backend 执行环境。
+bash scripts/build_envs.sh
+
+# 注意：Triton Python backend 执行环境必须匹配 Triton Python backend stub。
+# 默认 24.10-py3 使用 Python 3.10；不要指向已有的 server 启动环境。
 
 # 按需修改 configs/serve.yaml 后启动。
 bash scripts/start_triton.sh

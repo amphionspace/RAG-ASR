@@ -1,10 +1,11 @@
 # RAG-ASR service configuration.
 #
-# Edit this file for the current deployment. Machine-specific values can also
-# be provided through environment variables referenced as ${VAR_NAME}.
+# This is the single service configuration entry. Edit this file for the
+# current deployment, or set RAG_ASR_CONFIG to another YAML file with the same
+# schema.
 
 model:
-  base_model_path: ${RAG_ASR_BASE_MODEL:-checkpoints/base/amphion_1.7b_merged}
+  base_model_path: checkpoints/base/amphion_1.7b_merged
   adapter_subdir: hotword_adapter
   adapter_filename: best_adapter.pt
   # Optional legacy override. Prefer base_model_path/hotword_adapter/best_adapter.pt.
@@ -13,26 +14,26 @@ model:
   adapter_hidden_dim: 512
 
 retrieval:
-  hotword_pool_file: ${RAG_ASR_HOTWORD_POOL:-examples/hotword_pool.txt}
+  hotword_pool_file: examples/hotword_pool.txt
   default_top_k: 50
   cache_dir: var/retrieve_cache
   batch_text: 512
 
 runtime:
   device: cuda
-  cuda_visible_devices: "1"
+  cuda_visible_devices: "0"
   num_mel_bins: 128
 
 triton:
   model_repo: triton
   rendered_model_repo: var/triton_repo
-  # start_triton.sh activates the "triton" conda env before reading this file.
-  # The Python backend execution env is expected to live next to it by default.
-  exec_env: ${CONDA_PREFIX}/../triton-exec
-  # backend_dir defaults to ${TRITONSERVER_ROOT}/backends in start_triton.sh.
+  # Build this conda-pack archive with scripts/build_triton_exec_env.sh.
+  exec_env: var/triton-exec-env.tar.gz
+  # backend_dir is auto-derived from tritonserver; set explicitly if needed.
   # backend_dir: /path/to/tritonserver/backends
-  # Triton Python stub wheels often expect this prefix; override when using
-  # a custom stub or a deployment-managed symlink.
-  python_stub_link: ${RAG_ASR_TRITON_PYTHON_STUB_LINK:-/opt/pyenv_build/versions/3.12.3}
-  http_port: 8000
-  grpc_port: 8001
+  # Keep off for the default Triton 24.10 Python 3.10 backend stub. Set this
+  # only when using a custom stub that expects a deployment-managed symlink.
+  python_stub_link: off
+  http_port: 10001
+  grpc_port: 10002
+  metrics_port: 10003

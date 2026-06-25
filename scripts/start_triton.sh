@@ -21,7 +21,12 @@ else
   echo "conda is not available. Set CONDA_SH=/path/to/conda.sh."
   exit 1
 fi
-conda activate "${RAG_ASR_TRITON_CONDA_ENV:-triton}"
+TRITON_SERVER_ENV="${RAG_ASR_TRITON_CONDA_ENV:-triton}"
+if ! conda activate "$TRITON_SERVER_ENV"; then
+  echo "Failed to activate Triton server conda env: $TRITON_SERVER_ENV"
+  echo "Create an env with tritonserver/tritonclient installed, or set RAG_ASR_TRITON_CONDA_ENV."
+  exit 1
+fi
 export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 
 eval "$(
@@ -70,6 +75,7 @@ values = {
     "TRITON_BACKEND_DIR": backend_dir,
     "TRITON_HTTP_PORT": str(cfg.triton.http_port),
     "TRITON_GRPC_PORT": str(cfg.triton.grpc_port),
+    "TRITON_METRICS_PORT": str(cfg.triton.metrics_port),
     "CONFIG_CUDA_VISIBLE_DEVICES": cfg.runtime.cuda_visible_devices,
 }
 for key, value in values.items():
@@ -83,9 +89,18 @@ if [[ -z "$EXEC_ENV" ]]; then
   exit 1
 fi
 
-if [[ ! -x "$EXEC_ENV/bin/python3" ]]; then
+if [[ -f "$EXEC_ENV" ]]; then
+  case "$EXEC_ENV" in
+    *.tar|*.tar.gz|*.tgz) ;;
+    *)
+      echo "Invalid triton.exec_env archive: $EXEC_ENV"
+      echo "Expected a conda-pack archive ending in .tar, .tar.gz, or .tgz."
+      exit 1
+      ;;
+  esac
+elif [[ ! -x "$EXEC_ENV/bin/python3" ]]; then
   echo "Invalid triton.exec_env: $EXEC_ENV"
-  echo "Expected an existing Triton Python backend execution env with bin/python3."
+  echo "Expected a conda-pack archive or an existing Triton Python backend execution env with bin/python3."
   echo "Create it with: bash scripts/build_triton_exec_env.sh"
   exit 1
 fi
@@ -111,7 +126,7 @@ fi
 
 if [[ -z "$HOTWORD_POOL_FILE" ]]; then
   echo "Missing retrieval.hotword_pool_file in $CONFIG_PATH."
-  echo "Set retrieval.hotword_pool_file directly or export RAG_ASR_HOTWORD_POOL."
+  echo "Set retrieval.hotword_pool_file in $CONFIG_PATH."
   exit 1
 fi
 if [[ ! -f "$HOTWORD_POOL_FILE" ]]; then
@@ -152,9 +167,10 @@ PY
 
 check_port_available "http_port" "$TRITON_HTTP_PORT"
 check_port_available "grpc_port" "$TRITON_GRPC_PORT"
+check_port_available "metrics_port" "$TRITON_METRICS_PORT"
 
-# Triton Python backend stub links libpython built with this prefix (must be Python 3.12).
-if [[ -n "$PYENV_LINK" && "$PYENV_LINK" != "none" && "$PYENV_LINK" != "off" ]] && \
+# Some custom Triton Python backend stubs link libpython built with a fixed prefix.
+if [[ -n "$PYENV_LINK" && "$PYENV_LINK" != "none" && "$PYENV_LINK" != "off" && -d "$EXEC_ENV" ]] && \
    { [[ ! -e "$PYENV_LINK" ]] || [[ "$(readlink -f "$PYENV_LINK" 2>/dev/null)" != "$(readlink -f "$EXEC_ENV")" ]]; }; then
   echo "Creating pyenv symlink for Triton Python stub: $PYENV_LINK -> $EXEC_ENV"
   mkdir -p "$(dirname "$PYENV_LINK")"
@@ -170,8 +186,26 @@ export LANG="${LANG:-C.UTF-8}"
 export LC_ALL="${LC_ALL:-C.UTF-8}"
 export PYTHONUTF8=1
 
+if ! command -v tritonserver >/dev/null 2>&1; then
+  echo "tritonserver is not available in conda env: $TRITON_SERVER_ENV"
+  echo "Install NVIDIA Triton server in that env, or set RAG_ASR_TRITON_CONDA_ENV to the correct server env."
+  exit 1
+fi
+
 if [[ -z "$TRITON_BACKEND_DIR" ]]; then
-  TRITON_BACKEND_DIR="${TRITONSERVER_ROOT}/backends"
+  if [[ -n "${TRITONSERVER_ROOT:-}" ]]; then
+    TRITON_BACKEND_DIR="${TRITONSERVER_ROOT}/backends"
+  else
+    TRITONSERVER_BIN="$(command -v tritonserver)"
+    TRITONSERVER_PREFIX="$(cd "$(dirname "$TRITONSERVER_BIN")/.." && pwd)"
+    TRITON_BACKEND_DIR="$TRITONSERVER_PREFIX/backends"
+  fi
+fi
+
+if [[ ! -d "$TRITON_BACKEND_DIR" ]]; then
+  echo "Invalid Triton backend directory: $TRITON_BACKEND_DIR"
+  echo "Set triton.backend_dir in $CONFIG_PATH to the directory containing the python backend."
+  exit 1
 fi
 
 echo "config: $CONFIG_PATH"
@@ -183,4 +217,5 @@ exec tritonserver \
   --allow-gpu-metrics=false \
   --disable-auto-complete-config \
   --http-port="$TRITON_HTTP_PORT" \
-  --grpc-port="$TRITON_GRPC_PORT"
+  --grpc-port="$TRITON_GRPC_PORT" \
+  --metrics-port="$TRITON_METRICS_PORT"

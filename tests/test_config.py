@@ -39,9 +39,10 @@ def _minimal_config(tmp_path: Path) -> dict:
         "triton": {
             "model_repo": str(tmp_path / "triton_src"),
             "rendered_model_repo": str(tmp_path / "triton_rendered"),
-            "exec_env": str(tmp_path / "triton-exec"),
+            "exec_env": str(tmp_path / "triton-exec-env.tar.gz"),
             "http_port": 18000,
             "grpc_port": 18001,
+            "metrics_port": 18002,
         },
     }
 
@@ -59,6 +60,7 @@ def test_load_config_interpolates_env(tmp_path: Path, monkeypatch: pytest.Monkey
     assert cfg.retrieval.hotword_pool_file == str(tmp_path / "env_pool.txt")
     assert cfg.triton.backend_dir == "/default/backends"
     assert cfg.triton.python_stub_link == "/default/pyenv"
+    assert cfg.triton.metrics_port == 18002
     assert cfg.to_serve_kwargs()["hotword_pool_file"] == str(tmp_path / "env_pool.txt")
     assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter"
 

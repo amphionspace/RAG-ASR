@@ -103,11 +103,12 @@ class RuntimeConfig:
 class TritonConfig:
     model_repo: str = "triton"
     rendered_model_repo: str = "var/triton_repo"
-    exec_env: str = "${CONDA_PREFIX}/../triton-exec"
+    exec_env: str = "var/triton-exec-env.tar.gz"
     backend_dir: Optional[str] = None
     python_stub_link: str = "off"
     http_port: int = 8000
     grpc_port: int = 8001
+    metrics_port: int = 8002
 
 
 @dataclass(frozen=True)

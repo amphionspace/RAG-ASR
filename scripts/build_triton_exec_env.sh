@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build a conda-packed execution environment for Triton Python backend (Python 3.12).
+# Build a conda-packed execution environment for Triton Python backend.
+# Python version must match the Triton Python backend stub.
 # Override output with RAG_ASR_TRITON_EXEC_ENV_TAR when a shared archive is needed.
 # Does NOT modify the existing ``triton`` (vllm-clone) or ``vllm`` environments.
 
@@ -7,6 +8,7 @@ set -euo pipefail
 
 RAG_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_NAME="${RAG_ASR_TRITON_EXEC_ENV_NAME:-triton-exec}"
+PYTHON_VERSION="${RAG_ASR_TRITON_EXEC_PYTHON:-3.10}"
 OUT_TAR="${RAG_ASR_TRITON_EXEC_ENV_TAR:-$RAG_ROOT/var/triton-exec-env.tar.gz}"
 ACTIVATE_SRC="$(cd "$(dirname "$0")" && pwd)/triton_exec_activate.sh"
 
@@ -43,8 +45,15 @@ env_exists() {
 }
 
 if ! env_exists; then
-  echo "Creating conda env: $ENV_NAME (python=3.12)"
-  "$CONDA" create -n "$ENV_NAME" python=3.12 -y
+  echo "Creating conda env: $ENV_NAME (python=$PYTHON_VERSION)"
+  "$CONDA" create -n "$ENV_NAME" "python=$PYTHON_VERSION" -y
+fi
+
+PY_VER="$("$CONDA" run -n "$ENV_NAME" python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [[ "$PY_VER" != "$PYTHON_VERSION" ]]; then
+  echo "ERROR: $ENV_NAME must be Python $PYTHON_VERSION (Triton stub), got $PY_VER"
+  echo "Use another RAG_ASR_TRITON_EXEC_ENV_NAME, or recreate this env with the matching Python version."
+  exit 1
 fi
 
 echo "Installing RAG-ASR dependencies into $ENV_NAME ..."
@@ -55,17 +64,11 @@ echo "Installing RAG-ASR dependencies into $ENV_NAME ..."
   --index-url https://download.pytorch.org/whl/cu128
 "$CONDA" run -n "$ENV_NAME" python -m pip install \
   "transformers==4.57.6" "huggingface_hub==0.36.2" \
-  lhotse numpy soundfile librosa faiss-cpu fastapi uvicorn python-multipart
+  lhotse "numpy<2" soundfile librosa faiss-cpu fastapi uvicorn python-multipart
 "$CONDA" run -n "$ENV_NAME" python -m pip install "$RAG_ROOT" --no-deps
 
 # Triton directory execution env requires bin/activate.
 install -m 0755 "$ACTIVATE_SRC" "$ENV_DIR/bin/activate"
-
-PY_VER="$("$CONDA" run -n "$ENV_NAME" python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-if [[ "$PY_VER" != "3.12" ]]; then
-  echo "ERROR: $ENV_NAME must be Python 3.12 (Triton stub), got $PY_VER"
-  exit 1
-fi
 
 echo "Installing conda-pack ..."
 "$CONDA" install -n "$ENV_NAME" -y conda-pack

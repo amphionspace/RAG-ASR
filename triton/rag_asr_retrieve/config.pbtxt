@@ -102,7 +102,7 @@ instance_group [
 
 parameters: {
   key: "EXECUTION_ENV_PATH"
-  value: { string_value: "${RAG_ASR_TRITON_EXEC_ENV}" }
+  value: { string_value: "var/triton-exec-env.tar.gz" }
 }
 parameters: {
   key: "base_model_path"
@@ -118,7 +118,7 @@ parameters: {
 }
 parameters: {
   key: "hotword_pool_file"
-  value: { string_value: "${RAG_ASR_HOTWORD_POOL}" }
+  value: { string_value: "examples/hotword_pool.txt" }
 }
 parameters: {
   key: "embed_dim"
