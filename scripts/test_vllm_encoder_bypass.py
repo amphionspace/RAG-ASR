@@ -64,11 +64,20 @@ def _normalize_triton_url(value: str) -> str:
     return parsed.netloc or parsed.path
 
 
-def load_audio(path: Path) -> tuple[np.ndarray, int, str]:
+def load_audio(path: Path, *, target_sample_rate: int = 16000) -> tuple[np.ndarray, int, str]:
     audio, sr = sf.read(str(path), dtype="float32", always_2d=False)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     audio = np.asarray(audio, dtype=np.float32)
+    if int(sr) != int(target_sample_rate):
+        import librosa
+
+        audio = librosa.resample(
+            audio,
+            orig_sr=int(sr),
+            target_sr=int(target_sample_rate),
+        ).astype(np.float32, copy=False)
+        sr = int(target_sample_rate)
 
     wav_bytes = io.BytesIO()
     sf.write(wav_bytes, audio, int(sr), format="WAV", subtype="PCM_16")
@@ -98,8 +107,8 @@ def build_messages(
 
     hotwords_text = ",".join(word for word in hotwords if word)
     if prompt_style == "qwen3_asr":
-        # Amphion-1.7B/Qwen3-ASR fine-tune format: text metadata in system;
-        # user message contains only audio-like blocks.
+        # Amphion-1.7B/Qwen3-ASR style used by audiollm-demo: optional text
+        # metadata in system; user message contains only audio-like blocks.
         system_lines = []
         if hotwords_text:
             system_lines.append(f"Hotwords: {hotwords_text}")
