@@ -56,6 +56,19 @@ def _string_tensor(name: str, value: str) -> pb_utils.Tensor:
     return pb_utils.Tensor(name, np.array([value], dtype=object))
 
 
+def _audio_embeds_b64(frames: np.ndarray) -> str:
+    """Serialize projector frames using vLLM's audio_embeds wire format."""
+    import base64
+    import io
+
+    import torch
+
+    tensor = torch.from_numpy(np.asarray(frames, dtype=np.float32))
+    with io.BytesIO() as buf:
+        torch.save(tensor, buf)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 def _management_response(summary: dict[str, object]) -> pb_utils.InferenceResponse:
     hotwords = summary.get("hotwords", [])
     meta = {k: v for k, v in summary.items() if k != "hotwords"}
@@ -157,6 +170,13 @@ class TritonPythonModel:
             "WORD_LIST",
             np.array([json.dumps(result.word_list, ensure_ascii=False)], dtype=object),
         )
+        out_audio_embeds = pb_utils.Tensor(
+            "AUDIO_EMBEDS_B64",
+            np.array(
+                [_audio_embeds_b64(result.projector_out[: result.projector_len])],
+                dtype=object,
+            ),
+        )
         return pb_utils.InferenceResponse(
-            output_tensors=[out_proj, out_len, out_words]
+            output_tensors=[out_proj, out_len, out_words, out_audio_embeds]
         )
