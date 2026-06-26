@@ -101,6 +101,11 @@ output [
     dims: [ 1 ]
   }},
   {{
+    name: "AUDIO_EMBEDS_B64"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  }},
+  {{
     name: "STATUS"
     data_type: TYPE_STRING
     dims: [ 1 ]
@@ -178,6 +183,11 @@ output [
   }},
   {{
     name: "WORD_LIST"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+  }},
+  {{
+    name: "AUDIO_EMBEDS_B64"
     data_type: TYPE_STRING
     dims: [ -1 ]
   }}

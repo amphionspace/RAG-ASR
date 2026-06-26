@@ -21,6 +21,19 @@ def _optional_vector(request, name: str) -> list[int] | None:
     return [int(x) for x in tensor.as_numpy().reshape(-1).tolist()]
 
 
+def _audio_embeds_b64(frames: np.ndarray) -> str:
+    """Serialize projector frames using vLLM's audio_embeds wire format."""
+    import base64
+    import io
+
+    import torch
+
+    tensor = torch.from_numpy(np.asarray(frames, dtype=np.float32))
+    with io.BytesIO() as buf:
+        torch.save(tensor, buf)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
 class TritonPythonModel:
     def initialize(self, args):
         from rag_asr.serve import RAGASRRetriever
@@ -68,10 +81,14 @@ class TritonPythonModel:
             )
             projector_len = np.zeros((batch_size,), dtype=np.int32)
             word_list = np.empty((batch_size,), dtype=object)
+            audio_embeds = np.empty((batch_size,), dtype=object)
             for i, result in enumerate(results):
                 projector_out[i, : result.projector_len, :] = result.projector_out
                 projector_len[i] = result.projector_len
                 word_list[i] = json.dumps(result.word_list, ensure_ascii=False)
+                audio_embeds[i] = _audio_embeds_b64(
+                    result.projector_out[: result.projector_len]
+                )
 
             responses.append(
                 pb_utils.InferenceResponse(
@@ -79,6 +96,7 @@ class TritonPythonModel:
                         pb_utils.Tensor("PROJECTOR_OUT", projector_out),
                         pb_utils.Tensor("PROJECTOR_LEN", projector_len),
                         pb_utils.Tensor("WORD_LIST", word_list),
+                        pb_utils.Tensor("AUDIO_EMBEDS_B64", audio_embeds),
                     ]
                 )
             )
