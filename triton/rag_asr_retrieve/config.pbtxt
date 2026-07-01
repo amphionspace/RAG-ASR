@@ -22,6 +22,12 @@ input [
     optional: true
   },
   {
+    name: "USER_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  },
+  {
     name: "ACTION"
     data_type: TYPE_STRING
     dims: [ 1 ]
@@ -123,7 +129,19 @@ parameters: {
 }
 parameters: {
   key: "hotword_pool_file"
+  value: { string_value: "" }
+}
+parameters: {
+  key: "hotword_pool_dir"
+  value: { string_value: "var/hotwords" }
+}
+parameters: {
+  key: "seed_pool_file"
   value: { string_value: "examples/hotword_pool.txt" }
+}
+parameters: {
+  key: "default_user"
+  value: { string_value: "default" }
 }
 parameters: {
   key: "embed_dim"

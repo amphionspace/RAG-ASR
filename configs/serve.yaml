@@ -14,7 +14,12 @@ model:
   adapter_hidden_dim: 512
 
 retrieval:
-  hotword_pool_file: examples/hotword_pool.txt
+  hotword_pool_dir: var/hotwords
+  seed_pool_file: examples/hotword_pool.txt
+  default_user: default
+  # Optional legacy/default-user override. When omitted, the default user's
+  # mutable pool is hotword_pool_dir/default.txt and examples stays read-only.
+  # hotword_pool_file: var/hotwords/default.txt
   default_top_k: 50
   cache_dir: var/retrieve_cache
   batch_text: 512

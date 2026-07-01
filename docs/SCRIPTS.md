@@ -7,8 +7,8 @@
 | 脚本 | 语义 |
 |------|------|
 | `scripts/start_triton.sh` | 启动 Triton 在线服务；读取 `configs/serve.yaml` 或 `RAG_ASR_CONFIG`，渲染运行时 model repository 到 `var/triton_repo` |
-| `scripts/hotword_status.sh` | 查看当前 Triton 热词服务 live/ready、热词总量、样例热词和关键配置；默认连 `localhost:8000` |
-| `scripts/triton_hotword_client.py` | Triton 客户端；负责热词库管理和单条音频检索 |
+| `scripts/hotword_status.sh` | 查看当前 Triton 热词服务 live/ready、指定用户热词总量、样例热词和关键配置；默认连 `localhost:8000`、用户为 `default` |
+| `scripts/triton_hotword_client.py` | Triton 客户端；通过 `--user` 管理指定上游用户的热词库并做单条音频检索 |
 | `scripts/infer.sh` | 离线批量检索，用于数据集评测或生成 `hw_map` |
 | `scripts/train_retrieval.sh` | 训练双塔检索 adapter |
 | `scripts/pull_triton_image.sh` | 拉取官方 Triton Docker 镜像并抽取 `/opt/tritonserver` 到本地，内置重试，适合网络不稳定时放在 `tmux` 中运行 |

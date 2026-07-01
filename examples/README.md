@@ -13,7 +13,7 @@
 
 ## 示例数据
 
-`metadata.jsonl`、`transcripts.tsv`、`hotwords.tsv`、`hotword_pool.txt`、`wav.scp` 是冒烟脚本使用的小样例；`hotword_pool.txt` 也是 `configs/serve.yaml` 默认可启动的示例词池。
+`metadata.jsonl`、`transcripts.tsv`、`hotwords.tsv`、`hotword_pool.txt`、`wav.scp` 是冒烟脚本使用的小样例；`hotword_pool.txt` 也是 `configs/serve.yaml` 默认使用的只读种子词池。在线服务管理热词时会写入 `var/hotwords/<user>.txt`，不会修改本目录样例。
 
 ## 运行前置
 

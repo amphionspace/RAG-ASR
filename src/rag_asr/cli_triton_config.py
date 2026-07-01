@@ -53,6 +53,12 @@ input [
     optional: true
   }},
   {{
+    name: "USER_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
     name: "ACTION"
     data_type: TYPE_STRING
     dims: [ 1 ]
@@ -155,6 +161,12 @@ input [
     name: "WAV_LEN"
     data_type: TYPE_INT32
     dims: [ -1 ]
+  }},
+  {{
+    name: "USER_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
   }},
   {{
     name: "SAMPLE_RATE"

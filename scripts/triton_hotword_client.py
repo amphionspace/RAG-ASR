@@ -64,7 +64,10 @@ def _management_call(args, action: str, *, words: list[str] | None = None) -> di
     import tritonclient.http as httpclient
 
     client = httpclient.InferenceServerClient(url=args.url)
-    inputs = [_string_input("ACTION", action)]
+    inputs = [
+        _string_input("ACTION", action),
+        _string_input("USER_ID", args.user),
+    ]
     if words is not None:
         inputs.append(_string_input("HOTWORDS", json.dumps(words, ensure_ascii=False)))
     if getattr(args, "query", None):
@@ -153,6 +156,9 @@ def _important_parameters(config: dict[str, Any] | None) -> dict[str, Any]:
         "adapter_filename",
         "adapter_ckpt",
         "hotword_pool_file",
+        "hotword_pool_dir",
+        "seed_pool_file",
+        "default_user",
         "cache_dir",
         "default_top_k",
         "device",
@@ -180,6 +186,7 @@ def _cmd_status(args) -> dict:
         "server_ready": server_ready,
         "model_ready": model_ready,
         "hotword_pool": {
+            "user": hotwords.get("user_id") or args.user,
             "total_count": hotwords.get("hotword_count"),
             "matched_count": hotwords.get("matched_count"),
             "sample_limit": args.limit,
@@ -217,6 +224,7 @@ def _print_status_text(status: dict[str, Any]) -> None:
     print()
     print("Hotword Pool")
     print("-" * 32)
+    print(f"User         : {hotword_pool.get('user')}")
     print(f"Total count  : {hotword_pool.get('total_count')}")
     print(f"Matched count: {hotword_pool.get('matched_count')}")
     if hotword_pool.get("query"):
@@ -239,6 +247,9 @@ def _print_status_text(status: dict[str, Any]) -> None:
             "adapter_filename": "Adapter file",
             "adapter_ckpt": "Adapter ckpt",
             "hotword_pool_file": "Pool file",
+            "hotword_pool_dir": "Pool dir",
+            "seed_pool_file": "Seed pool",
+            "default_user": "Default user",
             "cache_dir": "Cache dir",
             "default_top_k": "Default top_k",
             "device": "Device",
@@ -271,6 +282,7 @@ def _cmd_infer(args) -> dict:
     client = httpclient.InferenceServerClient(url=args.url)
     inputs = [
         httpclient.InferInput("WAV", wav.shape, "FP32"),
+        _string_input("USER_ID", args.user),
         _int_input("SAMPLE_RATE", int(sr)),
         _int_input("TOP_K", args.top_k),
     ]
@@ -295,6 +307,7 @@ def main() -> None:
     )
     parser.add_argument("--url", default="localhost:8000")
     parser.add_argument("--model", default=MODEL_NAME)
+    parser.add_argument("--user", default="default", help="upstream user hotword pool id")
     sub = parser.add_subparsers(dest="command", required=True)
 
     status_p = sub.add_parser("status", help="show Triton readiness and hotword pool summary")

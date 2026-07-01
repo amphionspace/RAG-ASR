@@ -27,6 +27,9 @@ def _minimal_config(tmp_path: Path) -> dict:
         },
         "retrieval": {
             "hotword_pool_file": str(tmp_path / "pool.txt"),
+            "hotword_pool_dir": str(tmp_path / "pools"),
+            "seed_pool_file": str(tmp_path / "seed.txt"),
+            "default_user": "default",
             "default_top_k": 50,
             "cache_dir": str(tmp_path / "cache"),
             "batch_text": 128,
@@ -62,6 +65,8 @@ def test_load_config_interpolates_env(tmp_path: Path, monkeypatch: pytest.Monkey
     assert cfg.triton.python_stub_link == "/default/pyenv"
     assert cfg.triton.metrics_port == 18002
     assert cfg.to_serve_kwargs()["hotword_pool_file"] == str(tmp_path / "env_pool.txt")
+    assert cfg.to_serve_kwargs()["hotword_pool_dir"] == str(tmp_path / "pools")
+    assert cfg.to_triton_parameters()["default_user"] == "default"
     assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter"
 
 
@@ -107,5 +112,7 @@ def test_render_model_repo_uses_yaml_parameters(tmp_path: Path):
     assert str(tmp_path / "base_model") in config_text
     assert 'key: "adapter_subdir"' in config_text
     assert "hotword_adapter" in config_text
+    assert 'key: "hotword_pool_dir"' in config_text
+    assert 'name: "USER_ID"' in config_text
     assert 'key: "adapter_ckpt"' not in config_text
     assert (rendered / "rag_asr_retrieve" / "1" / "model.py").is_file()

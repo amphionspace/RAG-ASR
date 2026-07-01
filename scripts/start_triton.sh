@@ -61,6 +61,8 @@ values = {
     "EXEC_ENV": params["EXECUTION_ENV_PATH"],
     "BASE_MODEL_PATH": params["base_model_path"],
     "HOTWORD_POOL_FILE": params["hotword_pool_file"],
+    "HOTWORD_POOL_DIR": params["hotword_pool_dir"],
+    "SEED_POOL_FILE": params["seed_pool_file"],
     "HOTWORD_ADAPTER_PATH": str(
         resolve_hotword_adapter(
             params["base_model_path"],
@@ -124,13 +126,20 @@ if [[ ! -f "$HOTWORD_ADAPTER_PATH" ]]; then
   exit 1
 fi
 
-if [[ -z "$HOTWORD_POOL_FILE" ]]; then
-  echo "Missing retrieval.hotword_pool_file in $CONFIG_PATH."
-  echo "Set retrieval.hotword_pool_file in $CONFIG_PATH."
+if [[ -z "$HOTWORD_POOL_DIR" ]]; then
+  echo "Missing retrieval.hotword_pool_dir in $CONFIG_PATH."
   exit 1
 fi
-if [[ ! -f "$HOTWORD_POOL_FILE" ]]; then
+mkdir -p "$HOTWORD_POOL_DIR"
+
+if [[ -n "$SEED_POOL_FILE" && ! -f "$SEED_POOL_FILE" ]]; then
+  echo "Invalid retrieval.seed_pool_file: $SEED_POOL_FILE"
+  exit 1
+fi
+
+if [[ -n "$HOTWORD_POOL_FILE" && ! -f "$HOTWORD_POOL_FILE" ]]; then
   echo "Invalid retrieval.hotword_pool_file: $HOTWORD_POOL_FILE"
+  echo "Omit retrieval.hotword_pool_file to use retrieval.hotword_pool_dir/default_user.txt."
   exit 1
 fi
 
