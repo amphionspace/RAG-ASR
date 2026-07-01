@@ -21,6 +21,22 @@ def _optional_vector(request, name: str) -> list[int] | None:
     return [int(x) for x in tensor.as_numpy().reshape(-1).tolist()]
 
 
+def _decode_string(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _optional_string(request, name: str) -> str | None:
+    tensor = pb_utils.get_input_tensor_by_name(request, name)
+    if tensor is None:
+        return None
+    values = tensor.as_numpy().reshape(-1)
+    if values.size == 0:
+        return None
+    return _decode_string(values[0])
+
+
 def _audio_embeds_b64(frames: np.ndarray) -> str:
     """Serialize projector frames using vLLM's audio_embeds wire format."""
     import base64
@@ -63,12 +79,15 @@ class TritonPythonModel:
             ).as_numpy().astype(np.int32)
             sample_rates = _optional_vector(request, "SAMPLE_RATE")
             top_ks = _optional_vector(request, "TOP_K")
+            user_id = _optional_string(request, "USER_ID")
+            user_ids = [user_id] * int(wav_batch.shape[0])
 
             results = self.retriever.infer_padded_batch(
                 wav_batch,
                 wav_lens,
                 sample_rates=sample_rates,
                 top_ks=top_ks,
+                user_ids=user_ids,
                 packed_audio=self.packed_audio,
             )
 

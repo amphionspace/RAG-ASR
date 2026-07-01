@@ -61,7 +61,7 @@ pip install -e ".[faiss]"   # 可选，加速 top-K
 pip install -e ".[serve]"   # 可选，本地 HTTP 调试服务
 ```
 
-默认配置使用 `examples/hotword_pool.txt` 作为可启动的示例热词库。部署到真实业务时，按实际路径修改 `configs/serve.yaml` 中的模型目录、词池和 Triton 执行环境。
+默认配置使用 `examples/hotword_pool.txt` 作为只读种子，运行时可变热词库写到已忽略的 `var/hotwords/default.txt`。部署到真实业务时，按实际路径修改 `configs/serve.yaml` 中的模型目录、运行时词池目录和 Triton 执行环境。
 
 ## 新机器部署
 
@@ -117,6 +117,10 @@ python scripts/triton_hotword_client.py --url localhost:8000 import hotwords.txt
 python scripts/triton_hotword_client.py --url localhost:8000 add 北京烤鸭 上海迪士尼
 python scripts/triton_hotword_client.py --url localhost:8000 delete 北京烤鸭
 python scripts/triton_hotword_client.py --url localhost:8000 infer --wav audio.wav --top-k 50
+
+# 指定上游用户的独立热词池
+python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a add 专有热词
+python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a infer --wav audio.wav
 ```
 
 验证 vLLM encoder bypass 路径时，vLLM 需要以 `--enable-mm-embeds` 启动：
@@ -131,6 +135,7 @@ python examples/vllm_encoder_bypass.py \
 常用参数语义：
 
 - `--url`：Triton HTTP 地址，默认 `localhost:8000`。
+- `--user`：上游用户热词池 ID，默认 `default`；不同用户词池互相隔离。
 - `status`：显示当前服务 live/ready 状态、模型 ready 状态、热词总量、样例热词和关键配置；`hotword_status.sh` 默认输出人类可读文本，加 `-j` 输出 JSON。
 - `list --limit N`：最多显示 N 条已有热词，只控制查询结果分页大小，不影响热词库容量。
 - `list --query TEXT`：按子串过滤已有热词，用于确认某个热词是否已入库。
@@ -177,7 +182,7 @@ hw_map = retrieve_neural(
 
 - **模型代码**：`backends/amphion` 与 `backends/qwen3` 已从原仓库复制，通过 `model_loader.register_backends()` 注册到 HuggingFace。
 - **基座权重**（~4GB）：默认软链接到现有 checkpoint；见 `checkpoints/README.md` 改为本地拷贝。
-- **评测数据 / 词池**：仍依赖外部数据盘路径，按本机环境在 `configs/serve.yaml` 中配置；仅模型与检索代码自包含。
+- **评测数据 / 词池**：离线评测词池仍可通过外部数据盘路径传入；在线服务运行时词池默认在 `var/hotwords/`，`examples/hotword_pool.txt` 仅作只读种子。
 - **Triton 目录**：`triton/rag_asr_retrieve/1/` 中的 `1` 是 Triton 标准模型版本目录，不是 Python 包层级。
 - **运行产物**：`build/`、`*.egg-info/`、`exp/`、`_retrieve_cache/` 和 `var/` 都应视为本地生成物，不作为源码维护。
 

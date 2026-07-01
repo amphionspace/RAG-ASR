@@ -106,10 +106,12 @@ class TritonPythonModel:
         wavs = []
         sample_rates = []
         top_ks = []
+        user_ids = []
         infer_indices = []
 
         for i, request in enumerate(requests):
             action = (_optional_string(request, "ACTION") or "infer").strip().lower()
+            user_id = _optional_string(request, "USER_ID")
             try:
                 if action in {"infer", "retrieve"}:
                     wav_tensor = pb_utils.get_input_tensor_by_name(request, "WAV")
@@ -120,22 +122,30 @@ class TritonPythonModel:
                     wavs.append(wav)
                     sample_rates.append(_optional_int(request, "SAMPLE_RATE", 16000))
                     top_ks.append(_optional_int(request, "TOP_K"))
+                    user_ids.append(user_id)
                     infer_indices.append(i)
                 elif action == "list":
                     summary = self.retriever.list_hotwords(
+                        user_id=user_id,
                         query=_optional_string(request, "QUERY"),
                         limit=_optional_int(request, "LIMIT"),
                         offset=_optional_int(request, "OFFSET", 0) or 0,
                     )
                     responses[i] = _management_response(summary)
                 elif action == "add":
-                    summary = self.retriever.add_hotwords(_parse_hotwords(request))
+                    summary = self.retriever.add_hotwords(
+                        _parse_hotwords(request),
+                        user_id=user_id,
+                    )
                     responses[i] = _management_response(summary)
                 elif action in {"delete", "remove"}:
-                    summary = self.retriever.delete_hotwords(_parse_hotwords(request))
+                    summary = self.retriever.delete_hotwords(
+                        _parse_hotwords(request),
+                        user_id=user_id,
+                    )
                     responses[i] = _management_response(summary)
                 elif action == "reload":
-                    summary = self.retriever.reload_hotwords()
+                    summary = self.retriever.reload_hotwords(user_id=user_id)
                     responses[i] = _management_response(summary)
                 else:
                     responses[i] = _error_response(f"unknown ACTION: {action}")
@@ -147,6 +157,7 @@ class TritonPythonModel:
                 wavs,
                 sample_rates=sample_rates,
                 top_ks=top_ks,
+                user_ids=user_ids,
             )
             for request_index, result in zip(infer_indices, results):
                 responses[request_index] = self._infer_response(result)

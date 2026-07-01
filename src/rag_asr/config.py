@@ -86,7 +86,10 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class RetrievalConfig:
-    hotword_pool_file: str
+    hotword_pool_file: Optional[str] = None
+    hotword_pool_dir: str = "var/hotwords"
+    seed_pool_file: Optional[str] = "examples/hotword_pool.txt"
+    default_user: str = "default"
     default_top_k: int = 50
     cache_dir: Optional[str] = "var/retrieve_cache"
     batch_text: int = 512
@@ -122,6 +125,9 @@ class RagASRConfig:
         return {
             "base_model_path": _resolve_path(self.model.base_model_path),
             "hotword_pool_file": _resolve_path(self.retrieval.hotword_pool_file),
+            "hotword_pool_dir": _resolve_path(self.retrieval.hotword_pool_dir),
+            "seed_pool_file": _resolve_path(self.retrieval.seed_pool_file),
+            "default_user": self.retrieval.default_user,
             "adapter_ckpt": _resolve_path(self.model.adapter_ckpt)
             if self.model.adapter_ckpt
             else None,
@@ -141,6 +147,9 @@ class RagASRConfig:
             "EXECUTION_ENV_PATH": _resolve_path(self.triton.exec_env) or "",
             "base_model_path": _resolve_path(self.model.base_model_path) or "",
             "hotword_pool_file": _resolve_path(self.retrieval.hotword_pool_file) or "",
+            "hotword_pool_dir": _resolve_path(self.retrieval.hotword_pool_dir) or "",
+            "seed_pool_file": _resolve_path(self.retrieval.seed_pool_file) or "",
+            "default_user": self.retrieval.default_user,
             "adapter_subdir": self.model.adapter_subdir,
             "adapter_filename": self.model.adapter_filename,
             "embed_dim": str(self.model.embed_dim),

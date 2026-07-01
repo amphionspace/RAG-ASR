@@ -10,6 +10,7 @@ MODEL="${RAG_ASR_TRITON_MODEL:-rag_asr_retrieve}"
 LIMIT="${RAG_ASR_STATUS_LIMIT:-10}"
 OFFSET="${RAG_ASR_STATUS_OFFSET:-0}"
 QUERY="${RAG_ASR_STATUS_QUERY:-}"
+USER_ID="${RAG_ASR_STATUS_USER:-default}"
 VERBOSE=0
 FORMAT="text"
 CONDA_ENV="${RAG_ASR_CLIENT_CONDA_ENV:-triton}"
@@ -25,6 +26,7 @@ Options:
   -l LIMIT    Number of hotwords to show (default: 10)
   -o OFFSET   Hotword list offset (default: 0)
   -q QUERY    Substring filter for hotwords
+  -U USER     Upstream user hotword pool id (default: default)
   -v          Include full Triton input/output schema
   -j          Print raw JSON instead of human-readable text
   -h          Show this help
@@ -35,18 +37,20 @@ Environment overrides:
   RAG_ASR_STATUS_LIMIT
   RAG_ASR_STATUS_OFFSET
   RAG_ASR_STATUS_QUERY
+  RAG_ASR_STATUS_USER
   RAG_ASR_CLIENT_CONDA_ENV
   RAG_ASR_SKIP_CONDA=1
 EOF
 }
 
-while getopts ":u:m:l:o:q:vjh" opt; do
+while getopts ":u:m:l:o:q:U:vjh" opt; do
   case "$opt" in
     u) URL="$OPTARG" ;;
     m) MODEL="$OPTARG" ;;
     l) LIMIT="$OPTARG" ;;
     o) OFFSET="$OPTARG" ;;
     q) QUERY="$OPTARG" ;;
+    U) USER_ID="$OPTARG" ;;
     v) VERBOSE=1 ;;
     j) FORMAT="json" ;;
     h) usage; exit 0 ;;
@@ -72,6 +76,7 @@ cmd=(
   python "$ROOT/scripts/triton_hotword_client.py"
   --url "$URL"
   --model "$MODEL"
+  --user "$USER_ID"
   status
   --limit "$LIMIT"
   --offset "$OFFSET"

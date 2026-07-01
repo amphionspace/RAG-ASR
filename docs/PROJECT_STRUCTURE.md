@@ -23,7 +23,7 @@ RAG-ASR/
 ├── docs/              # 文档
 ├── checkpoints/       # 权重说明和本机权重入口
 ├── configs/           # 本机配置模板
-└── exp/, build/, var/ # 本地生成物，已忽略
+└── exp/, build/, var/ # 本地生成物，已忽略；在线热词池在 var/hotwords/
 ```
 
 ## Triton 目录规则
@@ -44,7 +44,7 @@ triton/
 
 1. 已落地：按职责分出 `examples/`(示例与冒烟)、`evaluation/`(数据集评测压测)、`tests/`(单测)，`scripts/` 收敛为 shell 运维入口；公共逻辑入 `src/rag_asr/`（如 `vllm_bypass.py`）。
 2. 把本机路径集中到 `configs/serve.yaml`，减少 `config.pbtxt`、`serve_http.sh`、`infer.sh` 之间的漂移。
-3. 将运行产物逐步收敛到 `var/`，例如 `var/cache/`、`var/exp/` 和 `var/benchmarks/`。
+3. 将运行产物逐步收敛到 `var/`，例如 `var/hotwords/`、`var/cache/`、`var/exp/` 和 `var/benchmarks/`。
 4. 把 `retrieve.py` 内收到 `src/rag_asr/cli_retrieve.py`，让 `rag-asr-retrieve` 不再 runpy 脚本；`merge_hw_maps.py` 等兼容入口在 `infer.sh` 改用 console script 后再删除。
 5. 在服务稳定后，再考虑把 `triton/` 整体迁到 `deployments/triton/`。
 6. 最后拆分 Python 包内部大文件，例如 `dual_tower.py`、`infer.py` 和 `train.py`。
