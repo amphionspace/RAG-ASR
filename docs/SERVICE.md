@@ -1,3 +1,42 @@
+# RAG-ASR Triton Service
+
+RAG-ASR is managed by systemd on this host as `rag-asr-triton.service`.
+
+## Unit
+
+- Unit file: `/etc/systemd/system/rag-asr-triton.service`
+- User: `ubuntu`
+- Working directory: `/home/ubuntu/workspace/RAG-ASR`
+- Start script: `/home/ubuntu/workspace/RAG-ASR/scripts/start_triton.sh`
+- Conda hook: `/home/ubuntu/miniconda3/etc/profile.d/conda.sh`
+
+The service is enabled for boot via `multi-user.target`.
+
+## Ports
+
+- HTTP: `10001`
+- gRPC: `10002`
+- Metrics: `10003`
+
+## Operations
+
+```bash
+sudo systemctl status rag-asr-triton.service
+sudo systemctl restart rag-asr-triton.service
+sudo journalctl -u rag-asr-triton.service -f
+```
+
+## Health Checks
+
+```bash
+curl http://127.0.0.1:10001/v2/health/live
+curl http://127.0.0.1:10001/v2/health/ready
+curl http://127.0.0.1:10001/v2/models/rag_asr_retrieve/ready
+```
+
+`audiollm-demo.service` has a systemd ordering drop-in at
+`/etc/systemd/system/audiollm-demo.service.d/20-rag-asr-ordering.conf`, so boot
+startup asks systemd to start RAG-ASR before AudioLLM.
 # RAG-ASR 在线检索服务
 
 将双塔热词检索封装为在线服务：输入一段音频，返回 **热词列表** 与 **帧级 projector 输出**（供下游 ASR 偏置使用）。
