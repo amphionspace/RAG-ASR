@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-URL="${RAG_ASR_TRITON_URL:-localhost:8000}"
+URL="${RAG_ASR_TRITON_URL:-localhost:10001}"
 MODEL="${RAG_ASR_TRITON_MODEL:-rag_asr_retrieve}"
 LIMIT="${RAG_ASR_STATUS_LIMIT:-10}"
 OFFSET="${RAG_ASR_STATUS_OFFSET:-0}"
@@ -21,12 +21,12 @@ Usage:
   bash scripts/hotword_status.sh [options]
 
 Options:
-  -u URL      Triton HTTP URL (default: localhost:8000)
+  -u URL      Triton HTTP URL (default: localhost:10001)
   -m MODEL    Triton model name (default: rag_asr_retrieve)
   -l LIMIT    Number of hotwords to show (default: 10)
   -o OFFSET   Hotword list offset (default: 0)
   -q QUERY    Substring filter for hotwords
-  -U USER     Upstream user hotword pool id (default: default)
+  -U POOL     Hotword pool id; legacy --user wire name (default: default)
   -v          Include full Triton input/output schema
   -j          Print raw JSON instead of human-readable text
   -h          Show this help

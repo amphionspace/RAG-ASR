@@ -93,7 +93,8 @@ bash scripts/start_triton.sh
 日常使用优先只看这 4 个入口：
 
 - `bash scripts/start_triton.sh`：启动 Triton 在线服务，加载 `rag_asr_retrieve`。
-- `python scripts/triton_hotword_client.py ...`：调用 Triton，负责热词库管理和单条音频检索。
+- `bash scripts/serve_http.sh`：启动 RAG-ASR HTTP 管理/调试服务，负责热词池管理和 enrollment embedding 状态。
+- `python scripts/triton_hotword_client.py ...`：旧 Triton 直连客户端，可用于状态检查和单条音频检索；热词管理新链路优先走 HTTP 管理服务。
 - `bash scripts/infer.sh`：离线批量检索，用于数据集评测或生成 `hw_map`。
 - `bash scripts/train_retrieval.sh`：训练双塔检索 adapter。
 
@@ -101,26 +102,33 @@ bash scripts/start_triton.sh
 
 ## 在线服务
 
-先启动 Triton：
+推荐把在线路径拆成两个服务面：
+
+- Triton 推理面：`rag_asr_retrieve`，默认 HTTP `10001`、gRPC `10002`、metrics `10003`，负责音频检索、热词召回和 projector 输出。
+- HTTP 管理面：`scripts/serve_http.sh`，默认 `8080`，可用 `PORT=18080` 独立启动，负责热词池增删查、reload，以及 enrollment embedding 的 upsert/get/delete。
+
+先启动 Triton 推理面：
 
 ```bash
 bash scripts/start_triton.sh
 ```
 
-然后用统一客户端管理热词库或检索音频：
+如需给 `audiollm-demo` 提供热词池或 enrollment 管理，另起 HTTP 管理面：
+
+```bash
+PORT=18080 bash scripts/serve_http.sh
+```
+
+Triton 直连客户端仍保留为兼容/诊断入口：
 
 ```bash
 bash scripts/hotword_status.sh
-python scripts/triton_hotword_client.py --url localhost:8000 status
-python scripts/triton_hotword_client.py --url localhost:8000 list --limit 20
-python scripts/triton_hotword_client.py --url localhost:8000 import hotwords.txt
-python scripts/triton_hotword_client.py --url localhost:8000 add 北京烤鸭 上海迪士尼
-python scripts/triton_hotword_client.py --url localhost:8000 delete 北京烤鸭
-python scripts/triton_hotword_client.py --url localhost:8000 infer --wav audio.wav --top-k 50
+python scripts/triton_hotword_client.py --url localhost:10001 status
+python scripts/triton_hotword_client.py --url localhost:10001 list --limit 20
+python scripts/triton_hotword_client.py --url localhost:10001 infer --wav audio.wav --top-k 50
 
-# 指定上游用户的独立热词池
-python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a add 专有热词
-python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a infer --wav audio.wav
+# --user 是兼容参数名，语义是热词池 ID，不是业务用户身份。
+python scripts/triton_hotword_client.py --url localhost:10001 --user tenant-a infer --wav audio.wav
 ```
 
 验证 vLLM encoder bypass 路径时，vLLM 需要以 `--enable-mm-embeds` 启动：
@@ -128,20 +136,19 @@ python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a inf
 ```bash
 python examples/vllm_encoder_bypass.py \
   --vllm-url http://localhost:8009 \
-  --triton-url localhost:8000 \
+  --triton-url localhost:10001 \
   --wav examples/audio/cv_zh_33411896.wav
 ```
 
 常用参数语义：
 
-- `--url`：Triton HTTP 地址，默认 `localhost:8000`。
-- `--user`：上游用户热词池 ID，默认 `default`；不同用户词池互相隔离。
+- `--url`：Triton HTTP 地址，本机服务默认 `localhost:10001`。
+- `--user`：兼容参数名，实际语义是热词池 ID（推荐文档中称 `hotword_pool_id`），默认 `default`；不同热词池互相隔离。
 - `status`：显示当前服务 live/ready 状态、模型 ready 状态、热词总量、样例热词和关键配置；`hotword_status.sh` 默认输出人类可读文本，加 `-j` 输出 JSON。
 - `list --limit N`：最多显示 N 条已有热词，只控制查询结果分页大小，不影响热词库容量。
 - `list --query TEXT`：按子串过滤已有热词，用于确认某个热词是否已入库。
 - `list --offset N`：分页偏移量，和 `--limit` 配合浏览大词库。
-- `import FILE`：从本地 txt/json 批量导入热词；服务端接收热词列表，不读取客户端文件路径。
-- `add WORD...` / `delete WORD...`：从命令行批量增删热词，服务端会做规范化、去重和有效性过滤。
+- `import FILE`、`add WORD...`、`delete WORD...`：兼容 Triton 管理命令；生产管理推荐调用 HTTP 管理面的 `/hotword-pool` 接口。
 - `infer --wav FILE --top-k K`：对单条音频做检索，返回 `WORD_LIST`、`PROJECTOR_LEN` 和 `PROJECTOR_OUT` 形状；这里的 `--top-k` 是召回热词数量，和 `list --limit` 不同。
 
 ## 离线批量检索
