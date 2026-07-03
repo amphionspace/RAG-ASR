@@ -130,7 +130,7 @@ class TritonPythonModel:
         wavs = []
         sample_rates = []
         top_ks = []
-        user_ids = []
+        hotword_pool_ids = []
         enrollment_user_ids = []
         enrollment_ids = []
         enable_hotword_recalls = []
@@ -141,9 +141,13 @@ class TritonPythonModel:
 
         for i, request in enumerate(requests):
             action = (_optional_string(request, "ACTION") or "infer").strip().lower()
-            user_id = _optional_string(request, "USER_ID")
+            legacy_user_id = _optional_string(request, "USER_ID")
+            hotword_pool_id = (
+                _optional_string(request, "HOTWORD_POOL_ID") or legacy_user_id
+            )
             enrollment_id = _optional_string(request, "ENROLLMENT_ID")
             enrollment_user_id = _optional_string(request, "ENROLLMENT_USER_ID")
+            enrollment_owner_id = enrollment_user_id or hotword_pool_id
             try:
                 if action in {"infer", "retrieve"}:
                     wav_tensor = pb_utils.get_input_tensor_by_name(request, "WAV")
@@ -154,7 +158,7 @@ class TritonPythonModel:
                     wavs.append(wav)
                     sample_rates.append(_optional_int(request, "SAMPLE_RATE", 16000))
                     top_ks.append(_optional_int(request, "TOP_K"))
-                    user_ids.append(user_id)
+                    hotword_pool_ids.append(hotword_pool_id)
                     enrollment_user_ids.append(enrollment_user_id)
                     enrollment_ids.append(enrollment_id)
                     enable_hotword_recalls.append(
@@ -188,7 +192,7 @@ class TritonPythonModel:
                         wav_tensor.as_numpy().astype(np.float32),
                         sample_rate=_optional_int(request, "SAMPLE_RATE", 16000),
                         enrollment_id=enrollment_id,
-                        user_id=user_id,
+                        user_id=enrollment_owner_id,
                     )
                     responses[i] = _management_response(summary)
                 elif action == "get_enrollment":
@@ -199,7 +203,7 @@ class TritonPythonModel:
                         continue
                     summary = self.retriever.get_enrollment(
                         enrollment_id=enrollment_id,
-                        user_id=user_id,
+                        user_id=enrollment_owner_id,
                     )
                     responses[i] = _management_response(summary)
                 elif action == "delete_enrollment":
@@ -210,12 +214,12 @@ class TritonPythonModel:
                         continue
                     summary = self.retriever.delete_enrollment(
                         enrollment_id=enrollment_id,
-                        user_id=user_id,
+                        user_id=enrollment_owner_id,
                     )
                     responses[i] = _management_response(summary)
                 elif action == "list":
                     summary = self.retriever.list_hotwords(
-                        user_id=user_id,
+                        user_id=hotword_pool_id,
                         query=_optional_string(request, "QUERY"),
                         limit=_optional_int(request, "LIMIT"),
                         offset=_optional_int(request, "OFFSET", 0) or 0,
@@ -224,17 +228,17 @@ class TritonPythonModel:
                 elif action == "add":
                     summary = self.retriever.add_hotwords(
                         _parse_hotwords(request),
-                        user_id=user_id,
+                        user_id=hotword_pool_id,
                     )
                     responses[i] = _management_response(summary)
                 elif action in {"delete", "remove"}:
                     summary = self.retriever.delete_hotwords(
                         _parse_hotwords(request),
-                        user_id=user_id,
+                        user_id=hotword_pool_id,
                     )
                     responses[i] = _management_response(summary)
                 elif action == "reload":
-                    summary = self.retriever.reload_hotwords(user_id=user_id)
+                    summary = self.retriever.reload_hotwords(user_id=hotword_pool_id)
                     responses[i] = _management_response(summary)
                 else:
                     responses[i] = _error_response(f"unknown ACTION: {action}")
@@ -247,7 +251,7 @@ class TritonPythonModel:
                     wavs,
                     sample_rates=sample_rates,
                     top_ks=top_ks,
-                    user_ids=user_ids,
+                    user_ids=hotword_pool_ids,
                     enable_hotword_recalls=enable_hotword_recalls,
                     enrollment_ids=enrollment_ids,
                     enrollment_user_ids=enrollment_user_ids,

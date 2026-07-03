@@ -59,6 +59,12 @@ input [
     optional: true
   }},
   {{
+    name: "HOTWORD_POOL_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
     name: "ACTION"
     data_type: TYPE_STRING
     dims: [ 1 ]
@@ -210,6 +216,12 @@ input [
   }},
   {{
     name: "USER_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
+    name: "HOTWORD_POOL_ID"
     data_type: TYPE_STRING
     dims: [ 1 ]
     optional: true

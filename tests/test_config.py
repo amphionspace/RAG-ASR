@@ -119,6 +119,7 @@ def test_render_model_repo_uses_yaml_parameters(tmp_path: Path):
     assert "hotword_adapter" in config_text
     assert 'key: "hotword_pool_dir"' in config_text
     assert 'name: "USER_ID"' in config_text
+    assert 'name: "HOTWORD_POOL_ID"' in config_text
     assert 'name: "ENROLLMENT_ID"' in config_text
     assert 'name: "ENROLLMENT_USER_ID"' in config_text
     assert 'key: "enrollment_store_dir"' in config_text
