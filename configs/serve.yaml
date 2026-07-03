@@ -16,6 +16,7 @@ model:
 retrieval:
   hotword_pool_dir: var/hotwords
   seed_pool_file: examples/hotword_pool.txt
+  # Historical field name. Semantics are the default hotword_pool_id.
   default_user: default
   # Optional legacy/default-user override. When omitted, the default user's
   # mutable pool is hotword_pool_dir/default.txt and examples stays read-only.
@@ -23,6 +24,10 @@ retrieval:
   default_top_k: 50
   cache_dir: var/retrieve_cache
   batch_text: 512
+  # Persist embedding tensors and metadata only; raw enrollment audio is not stored.
+  enrollment_store_dir: var/enrollments
+  enrollment_cache_max_entries: 256
+  enrollment_cache_device: auto
 
 runtime:
   device: cuda

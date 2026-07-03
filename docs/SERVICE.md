@@ -59,12 +59,13 @@ startup asks systemd to start RAG-ASR before AudioLLM.
 
 - 基座：`checkpoints/base/amphion_1.7b_merged`（`config.model_type=qwen3_asr`，目录名沿用历史命名）
 - Adapter：`checkpoints/base/amphion_1.7b_merged/hotword_adapter/best_adapter.pt`
-- 词池：默认以 `examples/hotword_pool.txt` 作为只读种子，运行时可变词池写到 `var/hotwords/<user>.txt`；生产在 `configs/serve.yaml` 中配置 `retrieval.hotword_pool_dir`
+- 词池：默认以 `examples/hotword_pool.txt` 作为只读种子，运行时可变词池写到 `var/hotwords/<hotword_pool_id>.txt`；旧协议字段 `USER_ID` / `--user` 的实际语义也是热词池 ID
+- Enrollment：只持久化推理后的 embedding tensor 与元数据，默认写到 `var/enrollments/{enrollment_user_id}/{enrollment_id}.pt` 和同名 `.json`
 - 配置入口：`configs/serve.yaml`
 
 ---
 
-## 两种部署方式
+## 服务边界与部署方式
 
 ```
                     ┌─────────────────────────────────────┐
@@ -72,16 +73,20 @@ startup asks systemd to start RAG-ASR before AudioLLM.
        │            └─────────────────────────────────────┘
        │                          ▲
        ├─ Triton HTTP/gRPC ───────┤  start_triton.sh
-       │   :8000 / :8001          │
+       │   :10001 / :10002        │
        │                          │
-       └─ FastAPI /retrieve ──────┘  serve_http.sh
-           :8080
+       └─ FastAPI 管理/调试 ──────┘  serve_http.sh
+           :8080 或 PORT=18080
 ```
 
 | 方式 | 启动脚本 | 端口 | 适用场景 |
 |------|----------|------|----------|
-| **Triton（推荐生产）** | `scripts/start_triton.sh` | HTTP 8000，gRPC 8001 | 集群部署、标准推理协议 |
-| **HTTP 直连（调试）** | `scripts/serve_http.sh` | 8080 | 本地快速验证，不依赖 Triton |
+| **Triton 推理面（生产默认）** | `scripts/start_triton.sh` | HTTP 10001，gRPC 10002，metrics 10003 | 音频检索、热词召回、projector 输出 |
+| **HTTP 管理/调试面** | `scripts/serve_http.sh` | 默认 8080，可用 `PORT=18080` | 热词池管理、enrollment embedding 管理、本地 `/retrieve` 调试 |
+
+AudioLLM 新链路推荐只把热词池和 enrollment 状态管理流量打到 HTTP 管理面；Triton 模型输入输出保持推理路径兼容。这样可以绕开当前 Python backend 对字符串/控制张量的运行时风险，也避免把注册人原始音频长期留在上游服务。
+
+HTTP 管理面会直接加载 `RAGASRRetriever`，因此启动环境必须包含模型推理依赖和 FastAPI/uvicorn。不要假设 `triton` server 启动环境一定可用；如果该环境只安装了 `tritonserver` 和客户端包，会缺 `torch`、`uvicorn`、`fastapi`、`soundfile` 等依赖。生产/灰度建议使用由 `scripts/build_triton_exec_env.sh` 创建的 Python 3.10 执行环境，例如 `triton-exec310`。
 
 ---
 
@@ -311,21 +316,52 @@ bash scripts/start_triton.sh
 成功时日志中应出现：
 
 - `rag_asr_retrieve | 1 | READY`
-- `Started HTTPService at 0.0.0.0:8000`
+- `Started HTTPService at 0.0.0.0:10001`
 
 健康检查：
 
 ```bash
-curl http://localhost:8000/v2/health/ready
+curl http://localhost:10001/v2/health/ready
 # 200
 ```
 
-### HTTP 调试服务
+### HTTP 管理/调试服务
 
 ```bash
-conda activate triton
+# 使用包含模型依赖和 FastAPI/uvicorn 的执行环境。
+conda activate triton-exec310
 bash scripts/serve_http.sh
-# 或指定端口：PORT=9000 bash scripts/serve_http.sh
+# 或指定端口：PORT=18080 bash scripts/serve_http.sh
+```
+
+systemd 灰度示例：
+
+```ini
+[Unit]
+Description=RAG-ASR HTTP Management Service
+After=network.target rag-asr-triton.service
+Requires=rag-asr-triton.service
+Documentation=file:/home/ubuntu/workspace/RAG-ASR/docs/SERVICE.md
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/workspace/RAG-ASR
+Environment=CONDA_SH=/home/ubuntu/miniconda3/etc/profile.d/conda.sh
+Environment=PORT=18080
+Environment=RAG_ASR_TRITON_CONDA_ENV=triton-exec310
+ExecStart=/home/ubuntu/workspace/RAG-ASR/scripts/serve_http.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+如果希望沿用其他 conda 环境，先确认依赖完整：
+
+```bash
+conda run -n <env> python -c "import torch, fastapi, uvicorn, soundfile, transformers"
 ```
 
 ---
@@ -340,51 +376,56 @@ bash scripts/serve_http.sh
 conda activate triton
 python examples/triton_client_example.py \
   --wav examples/audio/cv_zh_33411896.wav \
-  --url localhost:8000 \
+  --url localhost:10001 \
   --top-k 50
 ```
 
 对 `examples/` 全集做召回评测：
 
 ```bash
-python examples/triton_recall_check.py --url localhost:8000
+python examples/triton_recall_check.py --url localhost:10001
 ```
 
-热词库管理与检索统一客户端：
+Triton 直连客户端可用于兼容测试和诊断；`--user` 是旧参数名，实际语义是热词池 ID：
 
 ```bash
 # 显示已有热词库，支持分页和子串过滤
-python scripts/triton_hotword_client.py --url localhost:8000 list --limit 20
-python scripts/triton_hotword_client.py --url localhost:8000 list --query 北京 --limit 20
-python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a list --limit 20
+python scripts/triton_hotword_client.py --url localhost:10001 list --limit 20
+python scripts/triton_hotword_client.py --url localhost:10001 list --query 北京 --limit 20
+python scripts/triton_hotword_client.py --url localhost:10001 --user tenant-a list --limit 20
 
-# 批量添加或从文件导入
-python scripts/triton_hotword_client.py --url localhost:8000 add 北京烤鸭 上海迪士尼
-python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a add 专有热词
-python scripts/triton_hotword_client.py --url localhost:8000 import hotwords.txt
-python scripts/triton_hotword_client.py --url localhost:8000 import hotwords.json
-
-# 批量删除与从服务端配置文件重载
-python scripts/triton_hotword_client.py --url localhost:8000 delete 北京烤鸭
-python scripts/triton_hotword_client.py --url localhost:8000 reload
-
-# 音频检索仍返回 projector 与热词召回结果
-python scripts/triton_hotword_client.py --url localhost:8000 --user tenant-a infer \
+# 音频检索返回 projector 与热词召回结果
+python scripts/triton_hotword_client.py --url localhost:10001 --user tenant-a infer \
   --wav examples/audio/cv_zh_33411896.wav \
   --top-k 50
 ```
 
-### HTTP 调试接口
+### HTTP 管理/调试接口
 
 ```bash
 curl -X POST http://localhost:8080/retrieve \
   -F "file=@examples/audio/cv_zh_33411896.wav" \
-  -F "user_id=tenant-a" \
+  -F "hotword_pool_id=tenant-a" \
   -F "top_k=50" \
   -F "sample_rate=16000"
 ```
 
 响应字段：`word_list`、`projector_len`、`projector_out`（二维数组）、`projector_dim`。
+
+管理接口字段：
+
+| 接口 | 方法 | 入参 | 说明 |
+|------|------|------|------|
+| `/health` | `GET` | 无 | HTTP 管理服务存活检查 |
+| `/hotword-pool` | `GET` | `hotword_pool_id`，可选 `query`、`limit`、`offset` | 查询热词池 |
+| `/hotword-pool` | `POST` | JSON: `hotword_pool_id`、`hotwords` | 新增热词 |
+| `/hotword-pool` | `DELETE` | JSON: `hotword_pool_id`、`hotwords` | 删除热词 |
+| `/hotword-pool/reload` | `POST` | JSON: `hotword_pool_id` | 从词池文件重载 |
+| `/enrollments/{enrollment_id}` | `POST` | multipart `file`：float32 PCM bytes；form: `enrollment_user_id`、`sample_rate` | 推理并保存注册人 embedding |
+| `/enrollments/{enrollment_id}` | `GET` | query: `enrollment_user_id` | 查询注册人 embedding 元数据 |
+| `/enrollments/{enrollment_id}` | `DELETE` | query: `enrollment_user_id` | 删除注册人 embedding 与元数据 |
+
+Enrollment HTTP 管理面只接收临时音频并保存 embedding tensor，不持久化注册人原始音频。持久化路径由 `retrieval.enrollment_store_dir` 控制，默认是 `var/enrollments/`。
 
 ### Triton 模型接口（`rag_asr_retrieve`）
 
@@ -393,14 +434,14 @@ curl -X POST http://localhost:8080/retrieve \
 | 名称 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `WAV` | FP32 | 检索必填 | 一维波形 |
-| `USER_ID` | STRING | 否 | 上游用户词池 ID，默认 `default`；不同用户词池互相隔离 |
+| `USER_ID` | STRING | 否 | 兼容字段名，实际语义是热词池 ID，默认 `default`；不同热词池互相隔离 |
 | `SAMPLE_RATE` | INT32 | 否 | 默认 16000 |
 | `TOP_K` | INT32 | 否 | 默认 50（见 `config.pbtxt`） |
-| `ACTION` | STRING | 否 | 默认 `infer`；可选 `infer`、`list`、`add`、`delete`、`reload` |
-| `HOTWORDS` | STRING | 管理写操作必填 | JSON 字符串或 JSON 数组，用于 `add` / `delete` |
-| `QUERY` | STRING | 否 | `list` 的子串过滤 |
-| `LIMIT` | INT32 | 否 | `list` 返回数量 |
-| `OFFSET` | INT32 | 否 | `list` 分页偏移 |
+| `ENABLE_HOTWORD_RECALL` | UINT8 | 否 | `1` 时启用热词召回，`0` 时跳过热词召回 |
+| `ENROLLMENT_ID` | STRING | 否 | 可选注册人 ID；新链路推荐通过 HTTP 管理面维护对应 embedding |
+| `WANT_TARGET_AUDIO_EMBEDS` | UINT8 | 否 | 是否返回目标音频 embedding |
+| `WANT_ENROLLMENT_AUDIO_EMBEDS` | UINT8 | 否 | 是否返回注册人 enrollment embedding |
+| `ACTION` / `HOTWORDS` / `QUERY` / `LIMIT` / `OFFSET` | 多类型 | 否 | 旧 Triton 管理兼容字段；生产管理推荐使用 HTTP 管理面 |
 
 **输出**
 
@@ -413,20 +454,23 @@ curl -X POST http://localhost:8080/retrieve \
 | `MESSAGE` | STRING | 管理动作 JSON 摘要，包含新增、删除、重复、非法等统计 |
 | `HOTWORD_COUNT` | INT32 | 当前热词库总数 |
 | `HOTWORD_LIST` | STRING | `list` 或写操作影响到的热词 JSON 数组 |
+| `AUDIO_EMBEDS_B64` | STRING | 目标音频 embedding 的 base64 表示，旧输出语义保持不变 |
+| `ENROLLMENT_AUDIO_EMBEDS_B64` | STRING | 注册人 embedding 的 base64 表示，新客户端按需请求 |
 
 模型仓库：`triton/rag_asr_retrieve/`（`config.pbtxt` + `1/model.py`）。
 
-热词管理说明：
+兼容说明：
 
 - `ACTION` 未传时保持旧客户端兼容，仍按音频检索执行。
-- `USER_ID` 未传时使用 `retrieval.default_user`，默认是 `default`；每个用户只检索和管理自己的独立词池。
-- `add` 会在同一个 Triton 模型实例内用已加载的 `tokenizer + text_tower + adapter` 为新增热词生成 embedding，并立即加入该用户常驻显存的词池 embedding。
-- `delete` 按规范化后的 dedupe key 删除当前用户词池内的热词，英文/拉丁默认大小写不敏感，中文保持词面 exact。
-- `list` 显示当前用户服务内存里的已有热词库，可分页返回，避免一次性拉取大词库。
+- `USER_ID` 未传时使用 `retrieval.default_user`，默认是 `default`；这里的 “user” 是历史命名，语义应理解为 `hotword_pool_id`。
+- Triton 内的 `ACTION=list/add/delete/reload` 仅作为旧客户端兼容和诊断能力保留；AudioLLM 新链路应使用 HTTP 管理服务。
+- `add` 会在同一个 Triton 模型实例内用已加载的 `tokenizer + text_tower + adapter` 为新增热词生成 embedding，并立即加入该热词池常驻显存的词池 embedding。
+- `delete` 按规范化后的 dedupe key 删除当前热词池内的热词，英文/拉丁默认大小写不敏感，中文保持词面 exact。
+- `list` 显示当前热词池在服务内存里的已有热词库，可分页返回，避免一次性拉取大词库。
 - `import` 是客户端命令：客户端读取本地 txt/json 后把热词数组发给 Triton；服务端不会读取客户端传来的任意文件路径。
-- 管理操作会把规范化后的词库写回 `retrieval.hotword_pool_dir/<USER_ID>.txt`（或 default 用户的显式 `retrieval.hotword_pool_file` 覆盖），并覆盖刷新该用户的 text embedding cache，保证重启后词库一致。
+- 管理操作会把规范化后的词库写回 `retrieval.hotword_pool_dir/<hotword_pool_id>.txt`（或 default 池的显式 `retrieval.hotword_pool_file` 覆盖），并覆盖刷新该词池的 text embedding cache，保证重启后词库一致。
 - `examples/hotword_pool.txt` 只作为 default 用户首次启动时的只读种子；服务不会再把在线管理结果写回 examples。
-- 当前热词状态属于单个 Triton Python backend 实例，生产应保持 `instance_group count: 1`；多实例/多机要额外同步每个用户的词池文件和内存状态。
+- 当前热词状态属于单个服务实例；多实例/多机部署要额外同步每个热词池文件和内存状态。
 
 入库规则：
 
@@ -463,10 +507,10 @@ RAG-ASR/
 │   ├── build_triton_server_env.sh # 构建 triton server 环境
 │   ├── build_triton_exec_env.sh # 构建 triton-exec
 │   ├── start_triton.sh          # 启动 Triton
-│   ├── serve_http.sh            # 启动 HTTP 调试服务
+│   ├── serve_http.sh            # 启动 HTTP 管理/调试服务
 │   ├── serve_http.py
 │   ├── triton_client_test.py    # 单条 Triton 测试
-│   ├── triton_hotword_client.py # Triton 检索 + 热词管理客户端
+│   ├── triton_hotword_client.py # Triton 检索 + 旧管理兼容客户端
 │   └── test_triton_examples.py  # examples 批量测试 + recall
 └── examples/                    # 样例音频与标注
 ```
@@ -522,6 +566,34 @@ sudo ln -sfn /home/ubuntu/miniconda3/envs/triton-exec /opt/pyenv_build/versions/
 bash scripts/start_triton.sh
 ```
 
+### Triton 输出 shape 正确但 `binary_data_size=0`
+
+如果 Triton `infer` 返回的输出 shape 正确，但客户端读取时报：
+
+```text
+cannot reshape array of size 0 into shape (1,)
+```
+
+或 HTTP 响应里所有输出都类似 `binary_data_size: 0`，优先检查 Python backend 执行环境。这个现象通常不是业务推理结果为空，而是 Triton Python backend stub 与执行环境 ABI 不匹配，尤其是 Python 版本不匹配或 `numpy>=2`。当前 `24.10-py3` 部署要求 Python 3.10，且本项目执行环境脚本固定安装 `numpy<2`。
+
+检查：
+
+```bash
+conda run -n triton-exec310 python -c "import sys,numpy; print(sys.version.split()[0], numpy.__version__)"
+```
+
+期望 Python 是 `3.10.x`，numpy 是 `1.x`。如不满足，重建执行环境并重启 Triton：
+
+```bash
+RAG_ASR_TRITON_EXEC_ENV_NAME=triton-exec310 \
+RAG_ASR_TRITON_EXEC_PYTHON=3.10 \
+bash scripts/build_triton_exec_env.sh
+
+sudo systemctl restart rag-asr-triton.service
+```
+
+重启后用单条音频验证 `PROJECTOR_LEN`、`PROJECTOR_OUT`、`WORD_LIST`、`AUDIO_EMBEDS_B64` 都能读出非空 payload。
+
 ### `Port unavailable for triton.*_port`
 
 说明 `configs/serve.yaml` 中配置的 Triton 端口已被其他进程占用。先确认占用者：
@@ -563,11 +635,14 @@ Triton 自带 CUDA 13 runtime，与主机驱动 12.8 不匹配时，Triton 侧�
 - `model.base_model_path`：基座模型目录。
 - `model.adapter_subdir` / `model.adapter_filename`：默认读取 `base_model_path/hotword_adapter/best_adapter.pt`。
 - `model.adapter_ckpt`：可选旧式显式 adapter 路径，设置后优先级高于内置目录。
-- `retrieval.hotword_pool_dir`：运行时 per-user 热词池目录，默认 `var/hotwords`。
+- `retrieval.hotword_pool_dir`：运行时热词池目录，默认 `var/hotwords`；文件名按 `hotword_pool_id` 隔离。
 - `retrieval.seed_pool_file`：只读种子词池，默认 `examples/hotword_pool.txt`，用于初始化 default 用户。
-- `retrieval.default_user`：未传 `USER_ID` 时使用的用户 ID，默认 `default`。
+- `retrieval.default_user`：未传 `USER_ID` / `hotword_pool_id` 时使用的默认热词池 ID，默认 `default`。字段名保留历史兼容。
 - `retrieval.hotword_pool_file`：可选兼容字段；设置后作为 default 用户运行时词池文件的显式覆盖。
+- `retrieval.enrollment_store_dir`：注册人 embedding tensor 与元数据落盘目录，默认 `var/enrollments`。
+- `retrieval.enrollment_cache_max_entries`：运行时 enrollment embedding LRU 缓存容量。
+- `retrieval.enrollment_cache_device`：enrollment embedding 缓存设备，`auto` 时优先 GPU，必要时回落 CPU。
 - `retrieval.default_top_k`、`retrieval.cache_dir`、`runtime.device`。
 - `triton.exec_env`、`triton.http_port`、`triton.grpc_port`、`triton.metrics_port`、`triton.rendered_model_repo`。
 
-修改 `configs/serve.yaml` 后重启 Triton 即可生效。HTTP debug 服务 `scripts/serve_http.sh` 也读取同一份配置。
+修改 `configs/serve.yaml` 后重启对应服务即可生效。Triton 推理面读取端口与模型配置；HTTP 管理/调试服务 `scripts/serve_http.sh` 读取同一份检索、热词池和 enrollment 配置。

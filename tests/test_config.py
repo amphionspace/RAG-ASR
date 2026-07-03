@@ -33,6 +33,9 @@ def _minimal_config(tmp_path: Path) -> dict:
             "default_top_k": 50,
             "cache_dir": str(tmp_path / "cache"),
             "batch_text": 128,
+            "enrollment_store_dir": str(tmp_path / "enrollments"),
+            "enrollment_cache_max_entries": 12,
+            "enrollment_cache_device": "cpu",
         },
         "runtime": {
             "device": "cpu",
@@ -68,6 +71,8 @@ def test_load_config_interpolates_env(tmp_path: Path, monkeypatch: pytest.Monkey
     assert cfg.to_serve_kwargs()["hotword_pool_dir"] == str(tmp_path / "pools")
     assert cfg.to_triton_parameters()["default_user"] == "default"
     assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter"
+    assert cfg.to_triton_parameters()["enrollment_cache_max_entries"] == "12"
+    assert cfg.to_triton_parameters()["enrollment_cache_device"] == "cpu"
 
 
 def test_unknown_config_key_fails(tmp_path: Path):
@@ -114,5 +119,9 @@ def test_render_model_repo_uses_yaml_parameters(tmp_path: Path):
     assert "hotword_adapter" in config_text
     assert 'key: "hotword_pool_dir"' in config_text
     assert 'name: "USER_ID"' in config_text
+    assert 'name: "CONTROL_JSON"' in config_text
+    assert 'name: "ENROLLMENT_ID"' in config_text
+    assert 'name: "ENROLLMENT_USER_ID"' in config_text
+    assert 'key: "enrollment_store_dir"' in config_text
     assert 'key: "adapter_ckpt"' not in config_text
     assert (rendered / "rag_asr_retrieve" / "1" / "model.py").is_file()

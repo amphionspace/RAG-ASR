@@ -7,8 +7,9 @@
 | 脚本 | 语义 |
 |------|------|
 | `scripts/start_triton.sh` | 启动 Triton 在线服务；读取 `configs/serve.yaml` 或 `RAG_ASR_CONFIG`，渲染运行时 model repository 到 `var/triton_repo` |
-| `scripts/hotword_status.sh` | 查看当前 Triton 热词服务 live/ready、指定用户热词总量、样例热词和关键配置；默认连 `localhost:8000`、用户为 `default` |
-| `scripts/triton_hotword_client.py` | Triton 客户端；通过 `--user` 管理指定上游用户的热词库并做单条音频检索 |
+| `scripts/serve_http.sh` | 启动 HTTP 管理/调试服务；提供热词池管理、enrollment embedding 管理和 `/retrieve` 调试接口 |
+| `scripts/hotword_status.sh` | 查看当前 Triton 热词服务 live/ready、指定热词池总量、样例热词和关键配置；默认连 `localhost:10001`、热词池为 `default` |
+| `scripts/triton_hotword_client.py` | Triton 兼容客户端；`--user` 是旧参数名，实际语义是热词池 ID；生产管理推荐使用 HTTP 管理服务 |
 | `scripts/infer.sh` | 离线批量检索，用于数据集评测或生成 `hw_map` |
 | `scripts/train_retrieval.sh` | 训练双塔检索 adapter |
 | `scripts/pull_triton_image.sh` | 拉取官方 Triton Docker 镜像并抽取 `/opt/tritonserver` 到本地，内置重试，适合网络不稳定时放在 `tmux` 中运行 |
@@ -37,7 +38,7 @@
 
 `scripts/build_triton_server_env.sh` 创建启动 Triton server 的 conda 环境，默认名为 `triton`，安装 `tritonclient[http]` 和 `PyYAML`，并绑定已有官方 Triton server 安装。Triton server 本体不是 pip 包；裸机部署需先准备 `/opt/tritonserver` 这类官方安装，或用 `RAG_ASR_TRITONSERVER_ROOT` 指定实际路径。安装官方 Triton server 本体的步骤见 [docs/SERVICE.md](SERVICE.md)。环境名可用 `RAG_ASR_TRITON_SERVER_ENV_NAME` 覆盖；启动时 `scripts/start_triton.sh` 默认激活同名环境，也可用 `RAG_ASR_TRITON_CONDA_ENV` 指向已有 server 环境。
 
-`scripts/build_triton_exec_env.sh` 创建 Triton Python backend 的执行环境，默认名为 `triton-exec`。它会按 `CONDA`、`CONDA_EXE`、`conda` 命令、`CONDA_PREFIX` 的顺序寻找 conda。输出归档默认写到 `var/triton-exec-env.tar.gz`，可用 `RAG_ASR_TRITON_EXEC_ENV_TAR` 指向共享盘；环境名可用 `RAG_ASR_TRITON_EXEC_ENV_NAME` 覆盖。该执行环境的 Python 版本必须匹配 Triton Python backend stub；默认 `24.10-py3` 对应 Python 3.10，可用 `RAG_ASR_TRITON_EXEC_PYTHON` 覆盖。Triton Python stub symlink 在 `configs/serve.yaml` 的 `triton.python_stub_link` 配置，设为 `off` 或 `none` 时 `start_triton.sh` 不自动创建。
+`scripts/build_triton_exec_env.sh` 创建 Triton Python backend 的执行环境，默认名为 `triton-exec`。它会按 `CONDA`、`CONDA_EXE`、`conda` 命令、`CONDA_PREFIX` 的顺序寻找 conda。输出归档默认写到 `var/triton-exec-env.tar.gz`，可用 `RAG_ASR_TRITON_EXEC_ENV_TAR` 指向共享盘；环境名可用 `RAG_ASR_TRITON_EXEC_ENV_NAME` 覆盖。该执行环境的 Python 版本必须匹配 Triton Python backend stub；默认 `24.10-py3` 对应 Python 3.10，可用 `RAG_ASR_TRITON_EXEC_PYTHON` 覆盖，并固定安装 `numpy<2`。Triton Python stub symlink 在 `configs/serve.yaml` 的 `triton.python_stub_link` 配置，设为 `off` 或 `none` 时 `start_triton.sh` 不自动创建。如果 Triton 返回的输出 shape 正确但 `binary_data_size=0`，通常是该执行环境与 Python backend stub ABI 不匹配，先重建执行环境归档再重启 Triton。
 
 `scripts/infer.sh` 使用 `RAG_ASR_DATA_ROOT` 推导中英文测试 manifest，并使用 `RAG_ASR_HOTWORD_ROOT` 推导 `zh-10k.txt` 和 `en-10k.txt`。目录不一致时可设置 `RAG_ASR_CV_ZH_INFER_DIR`、`RAG_ASR_CV_EN_INFER_DIR`、`RAG_ASR_ZH_HOTWORD_POOL`、`RAG_ASR_EN_HOTWORD_POOL`，或直接设置 `RAG_ASR_ZH_SUPERVISIONS`、`RAG_ASR_ZH_RECORDINGS`、`RAG_ASR_EN_SUPERVISIONS`、`RAG_ASR_EN_RECORDINGS`。GPU 列表来自 `RAG_ASR_INFER_GPUS`，未设置时使用 `CUDA_VISIBLE_DEVICES`，再退回单卡 `0`。
 
@@ -49,8 +50,8 @@
 
 | 脚本 | 语义 |
 |------|------|
-| `scripts/serve_http.sh` | 本地 FastAPI 调试服务；读取同一份 `configs/serve.yaml` |
-| `scripts/serve_http.py` | `serve_http.sh` 调用的 Python 服务实现 |
+| `scripts/serve_http.sh` | 本地 FastAPI 管理/调试服务；默认端口 8080，可用 `PORT=18080` 给 AudioLLM 灰度管理链路使用；生产/灰度建议通过 `RAG_ASR_TRITON_CONDA_ENV=triton-exec310` 指向包含模型依赖和 FastAPI/uvicorn 的 Python 3.10 执行环境 |
+| `scripts/serve_http.py` | `serve_http.sh` 调用的 Python 服务实现，包含 `/hotword-pool`、`/enrollments/{enrollment_id}` 和 `/retrieve` |
 
 ## 离线内部依赖
 

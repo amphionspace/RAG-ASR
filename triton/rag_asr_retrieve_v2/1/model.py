@@ -79,8 +79,8 @@ class TritonPythonModel:
             ).as_numpy().astype(np.int32)
             sample_rates = _optional_vector(request, "SAMPLE_RATE")
             top_ks = _optional_vector(request, "TOP_K")
-            user_id = _optional_string(request, "USER_ID")
-            user_ids = [user_id] * int(wav_batch.shape[0])
+            hotword_pool_id = _optional_string(request, "USER_ID")
+            user_ids = [hotword_pool_id] * int(wav_batch.shape[0])
 
             results = self.retriever.infer_padded_batch(
                 wav_batch,
@@ -104,10 +104,13 @@ class TritonPythonModel:
             for i, result in enumerate(results):
                 projector_out[i, : result.projector_len, :] = result.projector_out
                 projector_len[i] = result.projector_len
-                word_list[i] = json.dumps(result.word_list, ensure_ascii=False)
+                word_list[i] = json.dumps(
+                    result.word_list,
+                    ensure_ascii=False,
+                ).encode("utf-8")
                 audio_embeds[i] = _audio_embeds_b64(
                     result.projector_out[: result.projector_len]
-                )
+                ).encode("utf-8")
 
             responses.append(
                 pb_utils.InferenceResponse(

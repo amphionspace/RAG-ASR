@@ -59,6 +59,12 @@ input [
     optional: true
   }},
   {{
+    name: "CONTROL_JSON"
+    data_type: TYPE_FP32
+    dims: [ -1 ]
+    optional: true
+  }},
+  {{
     name: "ACTION"
     data_type: TYPE_STRING
     dims: [ 1 ]
@@ -87,6 +93,42 @@ input [
     data_type: TYPE_INT32
     dims: [ 1 ]
     optional: true
+  }},
+  {{
+    name: "REQUEST_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
+    name: "ENROLLMENT_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
+    name: "ENROLLMENT_USER_ID"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
+    name: "ENABLE_HOTWORD_RECALL"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
+    name: "WANT_TARGET_AUDIO_EMBEDS"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
+  }},
+  {{
+    name: "WANT_ENROLLMENT_AUDIO_EMBEDS"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+    optional: true
   }}
 ]
 
@@ -109,6 +151,16 @@ output [
   {{
     name: "AUDIO_EMBEDS_B64"
     data_type: TYPE_STRING
+    dims: [ 1 ]
+  }},
+  {{
+    name: "ENROLLMENT_AUDIO_EMBEDS_B64"
+    data_type: TYPE_STRING
+    dims: [ 1 ]
+  }},
+  {{
+    name: "ENROLLMENT_PROJECTOR_LEN"
+    data_type: TYPE_INT32
     dims: [ 1 ]
   }},
   {{
