@@ -166,9 +166,7 @@ class TritonPythonModel:
         for i, request in enumerate(requests):
             action = (_optional_string(request, "ACTION") or "infer").strip().lower()
             legacy_user_id = _optional_string(request, "USER_ID")
-            hotword_pool_id = (
-                _optional_string(request, "HOTWORD_POOL_ID") or legacy_user_id
-            )
+            hotword_pool_id = legacy_user_id
             enrollment_id = _optional_string(request, "ENROLLMENT_ID")
             enrollment_user_id = _optional_string(request, "ENROLLMENT_USER_ID")
             enrollment_owner_id = enrollment_user_id or hotword_pool_id

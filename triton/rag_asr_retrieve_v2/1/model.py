@@ -103,10 +103,7 @@ class TritonPythonModel:
             ).as_numpy().astype(np.int32)
             sample_rates = _optional_vector(request, "SAMPLE_RATE")
             top_ks = _optional_vector(request, "TOP_K")
-            hotword_pool_id = (
-                _optional_string(request, "HOTWORD_POOL_ID")
-                or _optional_string(request, "USER_ID")
-            )
+            hotword_pool_id = _optional_string(request, "USER_ID")
             user_ids = [hotword_pool_id] * int(wav_batch.shape[0])
 
             results = self.retriever.infer_padded_batch(
