@@ -82,7 +82,7 @@ def _parse_hotwords(request) -> list[object]:
 
 
 def _string_tensor(name: str, value: str) -> pb_utils.Tensor:
-    return pb_utils.Tensor(name, np.array([value], dtype=object))
+    return pb_utils.Tensor(name, np.array([value.encode("utf-8")], dtype=object))
 
 
 def _audio_embeds_b64(frames: np.ndarray) -> str:

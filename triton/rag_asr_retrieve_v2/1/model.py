@@ -128,10 +128,13 @@ class TritonPythonModel:
             for i, result in enumerate(results):
                 projector_out[i, : result.projector_len, :] = result.projector_out
                 projector_len[i] = result.projector_len
-                word_list[i] = json.dumps(result.word_list, ensure_ascii=False)
+                word_list[i] = json.dumps(
+                    result.word_list,
+                    ensure_ascii=False,
+                ).encode("utf-8")
                 audio_embeds[i] = _audio_embeds_b64(
                     result.projector_out[: result.projector_len]
-                )
+                ).encode("utf-8")
 
             responses.append(
                 pb_utils.InferenceResponse(
