@@ -86,6 +86,8 @@ startup asks systemd to start RAG-ASR before AudioLLM.
 
 AudioLLM 新链路推荐只把热词池和 enrollment 状态管理流量打到 HTTP 管理面；Triton 模型输入输出保持推理路径兼容。这样可以绕开当前 Python backend 对字符串/控制张量的运行时风险，也避免把注册人原始音频长期留在上游服务。
 
+HTTP 管理面会直接加载 `RAGASRRetriever`，因此启动环境必须包含模型推理依赖和 FastAPI/uvicorn。不要假设 `triton` server 启动环境一定可用；如果该环境只安装了 `tritonserver` 和客户端包，会缺 `torch`、`uvicorn`、`fastapi`、`soundfile` 等依赖。生产/灰度建议使用由 `scripts/build_triton_exec_env.sh` 创建的 Python 3.10 执行环境，例如 `triton-exec310`。
+
 ---
 
 ## 当前推荐配置
@@ -326,9 +328,40 @@ curl http://localhost:10001/v2/health/ready
 ### HTTP 管理/调试服务
 
 ```bash
-conda activate triton
+# 使用包含模型依赖和 FastAPI/uvicorn 的执行环境。
+conda activate triton-exec310
 bash scripts/serve_http.sh
 # 或指定端口：PORT=18080 bash scripts/serve_http.sh
+```
+
+systemd 灰度示例：
+
+```ini
+[Unit]
+Description=RAG-ASR HTTP Management Service
+After=network.target rag-asr-triton.service
+Requires=rag-asr-triton.service
+Documentation=file:/home/ubuntu/workspace/RAG-ASR/docs/SERVICE.md
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/workspace/RAG-ASR
+Environment=CONDA_SH=/home/ubuntu/miniconda3/etc/profile.d/conda.sh
+Environment=PORT=18080
+Environment=RAG_ASR_TRITON_CONDA_ENV=triton-exec310
+ExecStart=/home/ubuntu/workspace/RAG-ASR/scripts/serve_http.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+如果希望沿用其他 conda 环境，先确认依赖完整：
+
+```bash
+conda run -n <env> python -c "import torch, fastapi, uvicorn, soundfile, transformers"
 ```
 
 ---
@@ -532,6 +565,34 @@ sudo ln -sfn /home/ubuntu/miniconda3/envs/triton-exec /opt/pyenv_build/versions/
 
 bash scripts/start_triton.sh
 ```
+
+### Triton 输出 shape 正确但 `binary_data_size=0`
+
+如果 Triton `infer` 返回的输出 shape 正确，但客户端读取时报：
+
+```text
+cannot reshape array of size 0 into shape (1,)
+```
+
+或 HTTP 响应里所有输出都类似 `binary_data_size: 0`，优先检查 Python backend 执行环境。这个现象通常不是业务推理结果为空，而是 Triton Python backend stub 与执行环境 ABI 不匹配，尤其是 Python 版本不匹配或 `numpy>=2`。当前 `24.10-py3` 部署要求 Python 3.10，且本项目执行环境脚本固定安装 `numpy<2`。
+
+检查：
+
+```bash
+conda run -n triton-exec310 python -c "import sys,numpy; print(sys.version.split()[0], numpy.__version__)"
+```
+
+期望 Python 是 `3.10.x`，numpy 是 `1.x`。如不满足，重建执行环境并重启 Triton：
+
+```bash
+RAG_ASR_TRITON_EXEC_ENV_NAME=triton-exec310 \
+RAG_ASR_TRITON_EXEC_PYTHON=3.10 \
+bash scripts/build_triton_exec_env.sh
+
+sudo systemctl restart rag-asr-triton.service
+```
+
+重启后用单条音频验证 `PROJECTOR_LEN`、`PROJECTOR_OUT`、`WORD_LIST`、`AUDIO_EMBEDS_B64` 都能读出非空 payload。
 
 ### `Port unavailable for triton.*_port`
 

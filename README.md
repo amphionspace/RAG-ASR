@@ -116,8 +116,17 @@ bash scripts/start_triton.sh
 如需给 `audiollm-demo` 提供热词池或 enrollment 管理，另起 HTTP 管理面：
 
 ```bash
+# 使用包含模型依赖和 FastAPI/uvicorn 的执行环境；不要用只包含
+# tritonserver/tritonclient 的 server 启动环境。
+conda activate triton-exec310
 PORT=18080 bash scripts/serve_http.sh
 ```
+
+灰度或生产部署时建议把该管理面作为独立 systemd 服务运行，并把
+`RAG_ASR_TRITON_CONDA_ENV` 指向同一类 Python 3.10 执行环境
+（例如 `triton-exec310`）。如果 Triton `infer` 输出 shape 正确但 payload
+是 `binary_data_size=0`，优先检查执行环境是否为 Python 3.10 且
+`numpy<2`，再重建 `var/triton-exec-env.tar.gz`。
 
 Triton 直连客户端仍保留为兼容/诊断入口：
 
