@@ -59,6 +59,12 @@ input [
     optional: true
   }},
   {{
+    name: "CONTROL_JSON"
+    data_type: TYPE_FP32
+    dims: [ -1 ]
+    optional: true
+  }},
+  {{
     name: "ACTION"
     data_type: TYPE_STRING
     dims: [ 1 ]

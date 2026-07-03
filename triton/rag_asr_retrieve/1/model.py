@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import base64
 import json
 import sys
 from pathlib import Path
@@ -12,6 +14,9 @@ import triton_python_backend_utils as pb_utils
 REPO_SRC = Path(__file__).resolve().parents[3] / "src"
 if REPO_SRC.is_dir():
     sys.path.insert(0, str(REPO_SRC))
+
+CONTROL_TRAILER_MARKER = np.float32(16777216.0)
+CONTROL_REQUEST_ID_PREFIX = "ctl:"
 
 
 def _decode_string(value) -> str:
@@ -45,7 +50,102 @@ def _optional_bool(request, name: str, default: bool = False) -> bool:
     return bool(value)
 
 
-def _parse_hotwords(request) -> list[object]:
+def _decode_control_array(name: str, array: np.ndarray) -> dict[str, object]:
+    if array.size == 0:
+        return {}
+    if np.issubdtype(array.dtype, np.integer) or np.issubdtype(
+        array.dtype,
+        np.floating,
+    ):
+        raw = bytes(array.astype(np.uint8).reshape(-1).tolist())
+    else:
+        value = array.reshape(-1)[0]
+        if isinstance(value, bytes):
+            raw = value
+        else:
+            raw = str(value).encode("utf-8")
+    if not raw:
+        return {}
+    text = raw.decode("utf-8")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            data = ast.literal_eval(text)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError(
+                f"invalid {name} dtype={array.dtype} shape={array.shape} "
+                f"text={text!r}"
+            ) from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"{name} must decode to a JSON object")
+    return data
+
+
+def _optional_control_tensor(request, name: str) -> dict[str, object]:
+    tensor = pb_utils.get_input_tensor_by_name(request, name)
+    if tensor is None:
+        return {}
+    return _decode_control_array(name, tensor.as_numpy())
+
+
+def _optional_request_id_control(request) -> dict[str, object]:
+    get_request_id = getattr(request, "request_id", None)
+    if get_request_id is None:
+        return {}
+    raw = get_request_id()
+    if raw is None:
+        return {}
+    value = _decode_string(raw)
+    if not value.startswith(CONTROL_REQUEST_ID_PREFIX):
+        return {}
+    encoded = value[len(CONTROL_REQUEST_ID_PREFIX) :]
+    padding = "=" * (-len(encoded) % 4)
+    data = json.loads(base64.urlsafe_b64decode(encoded + padding).decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("request_id control payload must decode to a JSON object")
+    return data
+
+
+def _optional_control(request) -> dict[str, object]:
+    return _optional_request_id_control(request) or _optional_control_tensor(
+        request,
+        "CONTROL_JSON",
+    )
+
+
+def _split_control_trailer(wav: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
+    audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+    if audio.size < 2 or float(audio[-1]) != float(CONTROL_TRAILER_MARKER):
+        return audio, {}
+    length = int(round(float(audio[-2])))
+    if length < 0 or length > audio.size - 2:
+        return audio, {}
+    start = audio.size - 2 - length
+    raw = bytes(audio[start : audio.size - 2].astype(np.uint8).tolist())
+    if not raw:
+        return audio[:start], {}
+    data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("WAV control trailer must decode to a JSON object")
+    return audio[:start], data
+
+
+def _control_string(control: dict[str, object], name: str) -> str | None:
+    value = control.get(name)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _parse_hotwords(request, control: dict[str, object] | None = None) -> list[object]:
+    if control and "hotwords" in control:
+        data = control.get("hotwords")
+        if isinstance(data, list):
+            return data
+        if isinstance(data, str):
+            return [data]
+        raise ValueError("control hotwords must be a JSON string or JSON array")
     raw = _optional_string(request, "HOTWORDS")
     if raw is None or not raw.strip():
         return []
@@ -58,7 +158,19 @@ def _parse_hotwords(request) -> list[object]:
 
 
 def _string_tensor(name: str, value: str) -> pb_utils.Tensor:
-    return pb_utils.Tensor(name, np.array([value.encode("utf-8")], dtype=object))
+    return pb_utils.Tensor(name, np.array([value], dtype=object))
+
+
+def _requested_output_names(request) -> set[str] | None:
+    for attr in ("requested_output_names", "requested_outputs"):
+        get_names = getattr(request, attr, None)
+        if get_names is None:
+            continue
+        names = get_names()
+        if names is None:
+            return None
+        return {str(name) for name in names}
+    return None
 
 
 def _audio_embeds_b64(frames: np.ndarray) -> str:
@@ -74,20 +186,27 @@ def _audio_embeds_b64(frames: np.ndarray) -> str:
         return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-def _management_response(summary: dict[str, object]) -> pb_utils.InferenceResponse:
+def _management_response(
+    summary: dict[str, object],
+    requested_outputs: set[str] | None = None,
+) -> pb_utils.InferenceResponse:
     hotwords = summary.get("hotwords", [])
     meta = {k: v for k, v in summary.items() if k != "hotwords"}
-    return pb_utils.InferenceResponse(
-        output_tensors=[
-            _string_tensor("STATUS", str(summary.get("status", "ok"))),
-            _string_tensor("MESSAGE", json.dumps(meta, ensure_ascii=False)),
-            pb_utils.Tensor(
-                "HOTWORD_COUNT",
-                np.array([int(summary.get("total_count", 0))], dtype=np.int32),
-            ),
-            _string_tensor("HOTWORD_LIST", json.dumps(hotwords, ensure_ascii=False)),
-        ]
-    )
+    outputs = {
+        "STATUS": _string_tensor("STATUS", str(summary.get("status", "ok"))),
+        "MESSAGE": _string_tensor("MESSAGE", json.dumps(meta, ensure_ascii=False)),
+        "HOTWORD_COUNT": pb_utils.Tensor(
+            "HOTWORD_COUNT",
+            np.array([int(summary.get("total_count", 0))], dtype=np.int32),
+        ),
+        "HOTWORD_LIST": _string_tensor(
+            "HOTWORD_LIST",
+            json.dumps(hotwords, ensure_ascii=False),
+        ),
+    }
+    if requested_outputs is not None:
+        outputs = {k: v for k, v in outputs.items() if k in requested_outputs}
+    return pb_utils.InferenceResponse(output_tensors=list(outputs.values()))
 
 
 def _infer_message(result, *, request_id: str | None = None) -> str:
@@ -140,19 +259,39 @@ class TritonPythonModel:
         infer_indices = []
 
         for i, request in enumerate(requests):
-            action = (_optional_string(request, "ACTION") or "infer").strip().lower()
-            legacy_user_id = _optional_string(request, "USER_ID")
-            hotword_pool_id = legacy_user_id
-            enrollment_id = _optional_string(request, "ENROLLMENT_ID")
-            enrollment_user_id = _optional_string(request, "ENROLLMENT_USER_ID")
-            enrollment_owner_id = enrollment_user_id or hotword_pool_id
+            wav_tensor = pb_utils.get_input_tensor_by_name(request, "WAV")
+            wav = None
+            wav_control: dict[str, object] = {}
+            if wav_tensor is not None:
+                wav, wav_control = _split_control_trailer(
+                    wav_tensor.as_numpy().astype(np.float32),
+                )
+            control = wav_control or _optional_control(request)
+            requested_outputs = _requested_output_names(request)
+            action = (
+                _control_string(control, "action")
+                or _optional_string(request, "ACTION")
+                or "infer"
+            ).strip().lower()
+            hotword_pool_id = (
+                _control_string(control, "hotword_pool_id")
+                or _control_string(control, "user_id")
+            )
+            enrollment_id = _control_string(control, "enrollment_id")
+            enrollment_user_id = _control_string(control, "enrollment_user_id")
             try:
                 if action in {"infer", "retrieve"}:
-                    wav_tensor = pb_utils.get_input_tensor_by_name(request, "WAV")
-                    if wav_tensor is None:
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        if _optional_bool(request, "WANT_ENROLLMENT_AUDIO_EMBEDS", False):
+                            enrollment_id = _optional_string(request, "ENROLLMENT_ID")
+                            enrollment_user_id = _optional_string(
+                                request,
+                                "ENROLLMENT_USER_ID",
+                            )
+                    if wav is None:
                         responses[i] = _error_response("WAV is required for infer")
                         continue
-                    wav = wav_tensor.as_numpy().astype(np.float32)
                     wavs.append(wav)
                     sample_rates.append(_optional_int(request, "SAMPLE_RATE", 16000))
                     top_ks.append(_optional_int(request, "TOP_K"))
@@ -172,28 +311,41 @@ class TritonPythonModel:
                             bool(enrollment_id),
                         )
                     )
-                    request_ids.append(_optional_string(request, "REQUEST_ID"))
+                    request_ids.append(_control_string(control, "request_id"))
                     infer_indices.append(i)
                 elif action == "upsert_enrollment":
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        enrollment_id = _optional_string(request, "ENROLLMENT_ID")
+                        enrollment_user_id = _optional_string(
+                            request,
+                            "ENROLLMENT_USER_ID",
+                        )
                     if not enrollment_id:
                         responses[i] = _error_response(
                             "ENROLLMENT_ID is required for upsert_enrollment"
                         )
                         continue
-                    wav_tensor = pb_utils.get_input_tensor_by_name(request, "WAV")
-                    if wav_tensor is None:
+                    if wav is None:
                         responses[i] = _error_response(
                             "WAV is required for upsert_enrollment"
                         )
                         continue
                     summary = self.retriever.upsert_enrollment(
-                        wav_tensor.as_numpy().astype(np.float32),
+                        wav,
                         sample_rate=_optional_int(request, "SAMPLE_RATE", 16000),
                         enrollment_id=enrollment_id,
-                        user_id=enrollment_owner_id,
+                        user_id=enrollment_user_id or hotword_pool_id,
                     )
-                    responses[i] = _management_response(summary)
+                    responses[i] = _management_response(summary, requested_outputs)
                 elif action == "get_enrollment":
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        enrollment_id = _optional_string(request, "ENROLLMENT_ID")
+                        enrollment_user_id = _optional_string(
+                            request,
+                            "ENROLLMENT_USER_ID",
+                        )
                     if not enrollment_id:
                         responses[i] = _error_response(
                             "ENROLLMENT_ID is required for get_enrollment"
@@ -201,10 +353,17 @@ class TritonPythonModel:
                         continue
                     summary = self.retriever.get_enrollment(
                         enrollment_id=enrollment_id,
-                        user_id=enrollment_owner_id,
+                        user_id=enrollment_user_id or hotword_pool_id,
                     )
-                    responses[i] = _management_response(summary)
+                    responses[i] = _management_response(summary, requested_outputs)
                 elif action == "delete_enrollment":
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        enrollment_id = _optional_string(request, "ENROLLMENT_ID")
+                        enrollment_user_id = _optional_string(
+                            request,
+                            "ENROLLMENT_USER_ID",
+                        )
                     if not enrollment_id:
                         responses[i] = _error_response(
                             "ENROLLMENT_ID is required for delete_enrollment"
@@ -212,32 +371,40 @@ class TritonPythonModel:
                         continue
                     summary = self.retriever.delete_enrollment(
                         enrollment_id=enrollment_id,
-                        user_id=enrollment_owner_id,
+                        user_id=enrollment_user_id or hotword_pool_id,
                     )
-                    responses[i] = _management_response(summary)
+                    responses[i] = _management_response(summary, requested_outputs)
                 elif action == "list":
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
                     summary = self.retriever.list_hotwords(
                         user_id=hotword_pool_id,
-                        query=_optional_string(request, "QUERY"),
+                        query=_control_string(control, "query") if control else None,
                         limit=_optional_int(request, "LIMIT"),
                         offset=_optional_int(request, "OFFSET", 0) or 0,
                     )
-                    responses[i] = _management_response(summary)
+                    responses[i] = _management_response(summary, requested_outputs)
                 elif action == "add":
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
                     summary = self.retriever.add_hotwords(
-                        _parse_hotwords(request),
+                        _parse_hotwords(request, control),
                         user_id=hotword_pool_id,
                     )
-                    responses[i] = _management_response(summary)
+                    responses[i] = _management_response(summary, requested_outputs)
                 elif action in {"delete", "remove"}:
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
                     summary = self.retriever.delete_hotwords(
-                        _parse_hotwords(request),
+                        _parse_hotwords(request, control),
                         user_id=hotword_pool_id,
                     )
-                    responses[i] = _management_response(summary)
+                    responses[i] = _management_response(summary, requested_outputs)
                 elif action == "reload":
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "USER_ID")
                     summary = self.retriever.reload_hotwords(user_id=hotword_pool_id)
-                    responses[i] = _management_response(summary)
+                    responses[i] = _management_response(summary, requested_outputs)
                 else:
                     responses[i] = _error_response(f"unknown ACTION: {action}")
             except Exception as exc:
