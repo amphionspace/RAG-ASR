@@ -21,9 +21,6 @@ def _decode_string(value) -> str:
 
 
 def _optional_string(request, name: str) -> str | None:
-    input_names = _request_input_names(request)
-    if input_names is not None and name not in input_names:
-        return None
     tensor = pb_utils.get_input_tensor_by_name(request, name)
     if tensor is None:
         return None
@@ -34,9 +31,6 @@ def _optional_string(request, name: str) -> str | None:
 
 
 def _optional_int(request, name: str, default: int | None = None) -> int | None:
-    input_names = _request_input_names(request)
-    if input_names is not None and name not in input_names:
-        return default
     tensor = pb_utils.get_input_tensor_by_name(request, name)
     if tensor is None:
         return default
@@ -49,24 +43,6 @@ def _optional_int(request, name: str, default: int | None = None) -> int | None:
 def _optional_bool(request, name: str, default: bool = False) -> bool:
     value = _optional_int(request, name, 1 if default else 0)
     return bool(value)
-
-
-def _request_input_names(request) -> set[str] | None:
-    inputs_attr = getattr(request, "inputs", None)
-    if callable(inputs_attr):
-        inputs = inputs_attr()
-    elif inputs_attr is not None:
-        inputs = inputs_attr
-    else:
-        return None
-    names: set[str] = set()
-    for tensor in inputs:
-        name_attr = getattr(tensor, "name", None)
-        if callable(name_attr):
-            names.add(str(name_attr()))
-        elif name_attr is not None:
-            names.add(str(name_attr))
-    return names
 
 
 def _parse_hotwords(request) -> list[object]:

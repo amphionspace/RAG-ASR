@@ -15,9 +15,6 @@ if REPO_SRC.is_dir():
 
 
 def _optional_vector(request, name: str) -> list[int] | None:
-    input_names = _request_input_names(request)
-    if input_names is not None and name not in input_names:
-        return None
     tensor = pb_utils.get_input_tensor_by_name(request, name)
     if tensor is None:
         return None
@@ -31,9 +28,6 @@ def _decode_string(value) -> str:
 
 
 def _optional_string(request, name: str) -> str | None:
-    input_names = _request_input_names(request)
-    if input_names is not None and name not in input_names:
-        return None
     tensor = pb_utils.get_input_tensor_by_name(request, name)
     if tensor is None:
         return None
@@ -41,24 +35,6 @@ def _optional_string(request, name: str) -> str | None:
     if values.size == 0:
         return None
     return _decode_string(values[0])
-
-
-def _request_input_names(request) -> set[str] | None:
-    inputs_attr = getattr(request, "inputs", None)
-    if callable(inputs_attr):
-        inputs = inputs_attr()
-    elif inputs_attr is not None:
-        inputs = inputs_attr
-    else:
-        return None
-    names: set[str] = set()
-    for tensor in inputs:
-        name_attr = getattr(tensor, "name", None)
-        if callable(name_attr):
-            names.add(str(name_attr()))
-        elif name_attr is not None:
-            names.add(str(name_attr))
-    return names
 
 
 def _audio_embeds_b64(frames: np.ndarray) -> str:
