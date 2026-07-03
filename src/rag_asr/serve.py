@@ -8,6 +8,9 @@ import os
 import re
 import tempfile
 import threading
+import time
+import hashlib
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -32,6 +35,7 @@ from rag_asr.model_layout import (
 
 logger = logging.getLogger(__name__)
 _USER_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
+_ENROLLMENT_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
 
 
 @dataclass
@@ -51,6 +55,9 @@ class ServeConfig:
     device: str = "cuda"
     num_mel_bins: int = 128
     batch_text: int = 512
+    enrollment_store_dir: str = "var/enrollments"
+    enrollment_cache_max_entries: int = 256
+    enrollment_cache_device: str = "auto"
 
 
 @dataclass
@@ -58,12 +65,20 @@ class InferResult:
     word_list: list[str]
     projector_out: np.ndarray  # (T', D_proj) float32
     projector_len: int
+    enrollment_id: Optional[str] = None
+    enrollment_projector_out: Optional[np.ndarray] = None
+    enrollment_projector_len: int = 0
+    enrollment_cache_hit: Optional[bool] = None
 
     def to_dict(self) -> dict:
         return {
             "word_list": self.word_list,
             "projector_out": self.projector_out,
             "projector_len": self.projector_len,
+            "enrollment_id": self.enrollment_id,
+            "enrollment_projector_out": self.enrollment_projector_out,
+            "enrollment_projector_len": self.enrollment_projector_len,
+            "enrollment_cache_hit": self.enrollment_cache_hit,
         }
 
 
@@ -74,6 +89,15 @@ class _UserPool:
     words: list[str]
     embs_gpu: torch.Tensor
     lock: threading.RLock
+
+
+@dataclass
+class _EnrollmentCacheEntry:
+    user_id: str
+    enrollment_id: str
+    tensor: torch.Tensor
+    meta: dict[str, object]
+    cache_device: str
 
 
 class RAGASRRetriever:
@@ -87,6 +111,10 @@ class RAGASRRetriever:
         self.default_user = self._resolve_user(cfg.default_user)
         self._pools_lock = threading.RLock()
         self._pools: dict[str, _UserPool] = {}
+        self._enrollment_lock = threading.RLock()
+        self._enrollment_cache: OrderedDict[
+            tuple[str, str], _EnrollmentCacheEntry
+        ] = OrderedDict()
         self.adapter_ckpt = str(
             resolve_hotword_adapter(
                 cfg.base_model_path,
@@ -117,6 +145,10 @@ class RAGASRRetriever:
             self._device,
         )
 
+    @staticmethod
+    def _now() -> float:
+        return time.time()
+
     def _resolve_user(self, user_id: Optional[str]) -> str:
         user = normalize_hotword(user_id or self.cfg.default_user)
         if not user:
@@ -126,6 +158,118 @@ class RAGASRRetriever:
                 "USER_ID must contain only letters, digits, dot, underscore, or hyphen"
             )
         return user
+
+    def _resolve_enrollment_id(self, enrollment_id: Optional[str]) -> str:
+        value = normalize_hotword(enrollment_id or "")
+        if (
+            not value
+            or not _ENROLLMENT_ID_RE.fullmatch(value)
+            or value in {".", ".."}
+        ):
+            raise ValueError(
+                "ENROLLMENT_ID must contain only letters, digits, dot, underscore, or hyphen"
+            )
+        return value
+
+    def _enrollment_paths(self, user_id: str, enrollment_id: str) -> tuple[Path, Path]:
+        root = Path(self.cfg.enrollment_store_dir)
+        return (
+            root / user_id / f"{enrollment_id}.pt",
+            root / user_id / f"{enrollment_id}.json",
+        )
+
+    @staticmethod
+    def _audio_hash(wav: np.ndarray, sample_rate: int) -> str:
+        audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+        digest = hashlib.sha256()
+        digest.update(str(int(sample_rate)).encode("ascii"))
+        digest.update(audio.tobytes())
+        return digest.hexdigest()
+
+    def _cache_device(self) -> torch.device:
+        configured = (self.cfg.enrollment_cache_device or "auto").strip().lower()
+        if configured == "auto":
+            return self._device
+        return torch.device(configured)
+
+    def _cache_enrollment_locked(
+        self,
+        *,
+        user_id: str,
+        enrollment_id: str,
+        tensor: torch.Tensor,
+        meta: dict[str, object],
+    ) -> _EnrollmentCacheEntry:
+        target_device = self._cache_device()
+        try:
+            cached_tensor = tensor.to(target_device)
+            cache_device = str(target_device)
+        except RuntimeError:
+            logger.warning(
+                "failed to move enrollment %s/%s to %s; caching on CPU",
+                user_id,
+                enrollment_id,
+                target_device,
+            )
+            cached_tensor = tensor.cpu()
+            cache_device = "cpu"
+        entry = _EnrollmentCacheEntry(
+            user_id=user_id,
+            enrollment_id=enrollment_id,
+            tensor=cached_tensor,
+            meta=dict(meta),
+            cache_device=cache_device,
+        )
+        key = (user_id, enrollment_id)
+        self._enrollment_cache.pop(key, None)
+        self._enrollment_cache[key] = entry
+        max_entries = max(int(self.cfg.enrollment_cache_max_entries), 0)
+        while max_entries and len(self._enrollment_cache) > max_entries:
+            self._enrollment_cache.popitem(last=False)
+        if max_entries == 0:
+            self._enrollment_cache.clear()
+        return entry
+
+    @staticmethod
+    def _atomic_json_write(path: Path, payload: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                delete=False,
+            ) as tmp:
+                tmp_name = tmp.name
+                json.dump(payload, tmp, ensure_ascii=False, sort_keys=True)
+            os.replace(tmp_name, path)
+        finally:
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except FileNotFoundError:
+                    pass
+
+    @staticmethod
+    def _atomic_torch_save(path: Path, tensor: torch.Tensor) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_name = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "wb",
+                dir=str(path.parent),
+                delete=False,
+            ) as tmp:
+                tmp_name = tmp.name
+                torch.save(tensor.detach().cpu(), tmp)
+            os.replace(tmp_name, path)
+        finally:
+            if tmp_name is not None:
+                try:
+                    os.unlink(tmp_name)
+                except FileNotFoundError:
+                    pass
 
     def _pool_file_for_user(self, user_id: str) -> Path:
         if user_id == self.default_user and self.cfg.hotword_pool_file:
@@ -463,6 +607,204 @@ class RAGASRRetriever:
             features[i, : feat.shape[0], :] = feat
         return features, feat_lens
 
+    def _project_audio(self, wav: np.ndarray, sample_rate: int) -> np.ndarray:
+        features, feat_lens = self._wav_to_features(wav, sample_rate)
+        features = features.to(self._device)
+        feat_lens = feat_lens.to(self._device)
+        with torch.no_grad():
+            _, proj, proj_lens = self.audio_tower.forward_with_projector(
+                features,
+                feat_lens,
+            )
+        plen = int(proj_lens[0].item())
+        return proj[0, :plen, :].detach().cpu().numpy().astype(np.float32)
+
+    def upsert_enrollment(
+        self,
+        wav: np.ndarray,
+        *,
+        sample_rate: int = 16000,
+        enrollment_id: Optional[str],
+        user_id: Optional[str] = None,
+    ) -> dict[str, object]:
+        """Persist target-speaker projector frames; raw audio is never stored."""
+        resolved_user = self._resolve_user(user_id)
+        resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
+        audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+        duration_sec = float(audio.shape[0]) / float(sample_rate or 16000)
+        frames = self._project_audio(audio, sample_rate)
+        tensor = torch.from_numpy(frames.astype(np.float32, copy=False))
+        tensor_path, meta_path = self._enrollment_paths(
+            resolved_user,
+            resolved_enrollment,
+        )
+        now = self._now()
+        meta: dict[str, object] = {
+            "user_id": resolved_user,
+            "enrollment_id": resolved_enrollment,
+            "audio_hash": self._audio_hash(audio, sample_rate),
+            "sample_rate": int(sample_rate),
+            "duration_sec": duration_sec,
+            "shape": list(tensor.shape),
+            "dtype": "float32",
+            "tensor_path": str(tensor_path),
+            "created_at": now,
+            "updated_at": now,
+            "last_used_at": now,
+        }
+        if meta_path.exists():
+            try:
+                previous = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(previous, dict) and previous.get("created_at"):
+                    meta["created_at"] = previous["created_at"]
+            except Exception:
+                logger.warning("failed to read existing enrollment metadata: %s", meta_path)
+        self._atomic_torch_save(tensor_path, tensor)
+        self._atomic_json_write(meta_path, meta)
+        with self._enrollment_lock:
+            entry = self._cache_enrollment_locked(
+                user_id=resolved_user,
+                enrollment_id=resolved_enrollment,
+                tensor=tensor,
+                meta=meta,
+            )
+        return {
+            "action": "upsert_enrollment",
+            "status": "ok",
+            "message": "enrollment embedding stored",
+            "user_id": resolved_user,
+            "enrollment_id": resolved_enrollment,
+            "audio_hash": meta["audio_hash"],
+            "duration_sec": duration_sec,
+            "shape": list(tensor.shape),
+            "tensor_path": str(tensor_path),
+            "cache_device": entry.cache_device,
+        }
+
+    def _load_enrollment_locked(
+        self,
+        *,
+        user_id: str,
+        enrollment_id: str,
+    ) -> tuple[_EnrollmentCacheEntry | None, bool]:
+        key = (user_id, enrollment_id)
+        cached = self._enrollment_cache.get(key)
+        now = self._now()
+        if cached is not None:
+            cached.meta["last_used_at"] = now
+            self._enrollment_cache.move_to_end(key)
+            _, meta_path = self._enrollment_paths(user_id, enrollment_id)
+            self._atomic_json_write(meta_path, cached.meta)
+            return cached, True
+
+        tensor_path, meta_path = self._enrollment_paths(user_id, enrollment_id)
+        if not tensor_path.exists():
+            return None, False
+        tensor = torch.load(tensor_path, map_location="cpu")
+        if not isinstance(tensor, torch.Tensor):
+            tensor = torch.as_tensor(tensor, dtype=torch.float32)
+        tensor = tensor.to(dtype=torch.float32)
+        meta: dict[str, object] = {
+            "user_id": user_id,
+            "enrollment_id": enrollment_id,
+            "shape": list(tensor.shape),
+            "dtype": "float32",
+            "tensor_path": str(tensor_path),
+            "last_used_at": now,
+        }
+        if meta_path.exists():
+            try:
+                loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    meta.update(loaded)
+            except Exception:
+                logger.warning("failed to read enrollment metadata: %s", meta_path)
+        meta["last_used_at"] = now
+        self._atomic_json_write(meta_path, meta)
+        entry = self._cache_enrollment_locked(
+            user_id=user_id,
+            enrollment_id=enrollment_id,
+            tensor=tensor,
+            meta=meta,
+        )
+        return entry, False
+
+    def get_enrollment(
+        self,
+        *,
+        enrollment_id: Optional[str],
+        user_id: Optional[str] = None,
+    ) -> dict[str, object]:
+        resolved_user = self._resolve_user(user_id)
+        resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
+        with self._enrollment_lock:
+            entry, hit = self._load_enrollment_locked(
+                user_id=resolved_user,
+                enrollment_id=resolved_enrollment,
+            )
+        if entry is None:
+            return {
+                "action": "get_enrollment",
+                "status": "not_found",
+                "message": "enrollment embedding not found",
+                "user_id": resolved_user,
+                "enrollment_id": resolved_enrollment,
+            }
+        return {
+            "action": "get_enrollment",
+            "status": "ok",
+            "message": "enrollment embedding found",
+            "user_id": resolved_user,
+            "enrollment_id": resolved_enrollment,
+            "shape": list(entry.tensor.shape),
+            "cache_hit": hit,
+            "cache_device": entry.cache_device,
+            **{
+                k: v
+                for k, v in entry.meta.items()
+                if k
+                in {
+                    "audio_hash",
+                    "sample_rate",
+                    "duration_sec",
+                    "tensor_path",
+                    "created_at",
+                    "updated_at",
+                    "last_used_at",
+                }
+            },
+        }
+
+    def delete_enrollment(
+        self,
+        *,
+        enrollment_id: Optional[str],
+        user_id: Optional[str] = None,
+    ) -> dict[str, object]:
+        resolved_user = self._resolve_user(user_id)
+        resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
+        tensor_path, meta_path = self._enrollment_paths(
+            resolved_user,
+            resolved_enrollment,
+        )
+        with self._enrollment_lock:
+            self._enrollment_cache.pop((resolved_user, resolved_enrollment), None)
+        deleted = False
+        for path in (tensor_path, meta_path):
+            try:
+                path.unlink()
+                deleted = True
+            except FileNotFoundError:
+                pass
+        return {
+            "action": "delete_enrollment",
+            "status": "ok",
+            "message": "enrollment embedding deleted" if deleted else "enrollment embedding absent",
+            "user_id": resolved_user,
+            "enrollment_id": resolved_enrollment,
+            "deleted": deleted,
+        }
+
     @staticmethod
     def _normalise_per_item_ints(
         values: Optional[list[Optional[int]]],
@@ -499,6 +841,41 @@ class RAGASRRetriever:
             raise ValueError(f"expected 1 or {n_items} USER_ID values, got {len(values)}")
         return out
 
+    def _normalise_per_item_enrollment_ids(
+        self,
+        values: Optional[list[Optional[str]]],
+        *,
+        n_items: int,
+    ) -> list[Optional[str]]:
+        if values is None:
+            return [None] * n_items
+        if len(values) == 1 and n_items != 1:
+            value = values[0]
+            resolved = self._resolve_enrollment_id(value) if value else None
+            return [resolved] * n_items
+        if len(values) == n_items:
+            return [
+                self._resolve_enrollment_id(value) if value else None
+                for value in values
+            ]
+        raise ValueError(f"expected 1 or {n_items} ENROLLMENT_ID values, got {len(values)}")
+
+    @staticmethod
+    def _normalise_per_item_bools(
+        values: Optional[list[Optional[bool]]],
+        *,
+        n_items: int,
+        default: bool,
+    ) -> list[bool]:
+        if values is None:
+            return [default] * n_items
+        if len(values) == 1 and n_items != 1:
+            value = default if values[0] is None else bool(values[0])
+            return [value] * n_items
+        if len(values) == n_items:
+            return [default if value is None else bool(value) for value in values]
+        raise ValueError(f"expected 1 or {n_items} boolean values, got {len(values)}")
+
     def _results_from_features(
         self,
         features: torch.Tensor,
@@ -506,10 +883,19 @@ class RAGASRRetriever:
         top_k_values: list[int],
         user_ids: list[str],
         *,
+        enable_hotword_recalls: Optional[list[bool]] = None,
+        enrollment_ids: Optional[list[Optional[str]]] = None,
+        enrollment_user_ids: Optional[list[str]] = None,
         packed_audio: bool = False,
     ) -> list[InferResult]:
         features = features.to(self._device)
         feat_lens = feat_lens.to(self._device)
+        if enable_hotword_recalls is None:
+            enable_hotword_recalls = [True] * len(top_k_values)
+        if enrollment_ids is None:
+            enrollment_ids = [None] * len(top_k_values)
+        if enrollment_user_ids is None:
+            enrollment_user_ids = user_ids
 
         if packed_audio and hasattr(self.audio_tower, "forward_with_projector_packed"):
             pooled, proj, proj_lens = self.audio_tower.forward_with_projector_packed(
@@ -527,7 +913,7 @@ class RAGASRRetriever:
                 pool_embs_gpu = pool.embs_gpu
                 hotword_pool = list(pool.words)
             pool_size = len(hotword_pool)
-            top_k = min(max(int(top_k), 0), pool_size)
+            top_k = 0 if not enable_hotword_recalls[i] else min(max(int(top_k), 0), pool_size)
             if top_k:
                 scores = pooled[i] @ pool_embs_gpu.T
                 indices = scores.topk(top_k).indices.tolist()
@@ -536,11 +922,34 @@ class RAGASRRetriever:
                 words = []
             plen = int(proj_lens[i].item())
             projector_out = proj[i, :plen, :].detach().cpu().numpy().astype(np.float32)
+            enrollment_id = enrollment_ids[i]
+            enrollment_projector_out = None
+            enrollment_projector_len = 0
+            enrollment_cache_hit = None
+            if enrollment_id:
+                with self._enrollment_lock:
+                    entry, enrollment_cache_hit = self._load_enrollment_locked(
+                        user_id=enrollment_user_ids[i],
+                        enrollment_id=enrollment_id,
+                    )
+                if entry is None:
+                    raise ValueError(
+                        f"enrollment embedding not found: user_id={enrollment_user_ids[i]} "
+                        f"enrollment_id={enrollment_id}"
+                    )
+                enrollment_projector_out = (
+                    entry.tensor.detach().cpu().numpy().astype(np.float32)
+                )
+                enrollment_projector_len = int(enrollment_projector_out.shape[0])
             results.append(
                 InferResult(
                     word_list=words,
                     projector_out=projector_out,
                     projector_len=plen,
+                    enrollment_id=enrollment_id,
+                    enrollment_projector_out=enrollment_projector_out,
+                    enrollment_projector_len=enrollment_projector_len,
+                    enrollment_cache_hit=enrollment_cache_hit,
                 )
             )
         return results
@@ -552,6 +961,9 @@ class RAGASRRetriever:
         sample_rate: int = 16000,
         top_k: Optional[int] = None,
         user_id: Optional[str] = None,
+        enable_hotword_recall: bool = True,
+        enrollment_id: Optional[str] = None,
+        enrollment_user_id: Optional[str] = None,
     ) -> InferResult:
         """Run retrieval on a single waveform."""
         return self.infer_many(
@@ -559,6 +971,9 @@ class RAGASRRetriever:
             sample_rates=[sample_rate],
             top_ks=[top_k],
             user_ids=[user_id],
+            enable_hotword_recalls=[enable_hotword_recall],
+            enrollment_ids=[enrollment_id],
+            enrollment_user_ids=[enrollment_user_id],
         )[0]
 
     @torch.no_grad()
@@ -569,6 +984,9 @@ class RAGASRRetriever:
         sample_rates: Optional[list[int]] = None,
         top_ks: Optional[list[Optional[int]]] = None,
         user_ids: Optional[list[Optional[str]]] = None,
+        enable_hotword_recalls: Optional[list[Optional[bool]]] = None,
+        enrollment_ids: Optional[list[Optional[str]]] = None,
+        enrollment_user_ids: Optional[list[Optional[str]]] = None,
     ) -> list[InferResult]:
         """Run retrieval for multiple waveforms in one model call.
 
@@ -597,6 +1015,23 @@ class RAGASRRetriever:
             user_ids,
             n_items=len(wavs),
         )
+        hotword_recall_values = self._normalise_per_item_bools(
+            enable_hotword_recalls,
+            n_items=len(wavs),
+            default=True,
+        )
+        enrollment_id_values = self._normalise_per_item_enrollment_ids(
+            enrollment_ids,
+            n_items=len(wavs),
+        )
+        enrollment_user_id_values = (
+            list(user_id_values)
+            if enrollment_user_ids is None
+            else self._normalise_per_item_user_ids(
+                enrollment_user_ids,
+                n_items=len(wavs),
+            )
+        )
 
         features, feat_lens = self._wavs_to_features(wavs, sample_rates)
         return self._results_from_features(
@@ -604,6 +1039,9 @@ class RAGASRRetriever:
             feat_lens,
             top_k_values,
             user_id_values,
+            enable_hotword_recalls=hotword_recall_values,
+            enrollment_ids=enrollment_id_values,
+            enrollment_user_ids=enrollment_user_id_values,
         )
 
     @torch.no_grad()
@@ -615,6 +1053,9 @@ class RAGASRRetriever:
         sample_rates: Optional[list[Optional[int]]] = None,
         top_ks: Optional[list[Optional[int]]] = None,
         user_ids: Optional[list[Optional[str]]] = None,
+        enable_hotword_recalls: Optional[list[Optional[bool]]] = None,
+        enrollment_ids: Optional[list[Optional[str]]] = None,
+        enrollment_user_ids: Optional[list[Optional[str]]] = None,
         packed_audio: bool = False,
     ) -> list[InferResult]:
         """Run retrieval for an explicit padded waveform batch.
@@ -645,6 +1086,23 @@ class RAGASRRetriever:
             user_ids,
             n_items=n_items,
         )
+        hotword_recall_values = self._normalise_per_item_bools(
+            enable_hotword_recalls,
+            n_items=n_items,
+            default=True,
+        )
+        enrollment_id_values = self._normalise_per_item_enrollment_ids(
+            enrollment_ids,
+            n_items=n_items,
+        )
+        enrollment_user_id_values = (
+            list(user_id_values)
+            if enrollment_user_ids is None
+            else self._normalise_per_item_user_ids(
+                enrollment_user_ids,
+                n_items=n_items,
+            )
+        )
         wavs = [
             wav_batch[i, : int(wav_lens[i])].copy()
             for i in range(n_items)
@@ -655,6 +1113,9 @@ class RAGASRRetriever:
             feat_lens,
             top_k_values,
             user_id_values,
+            enable_hotword_recalls=hotword_recall_values,
+            enrollment_ids=enrollment_id_values,
+            enrollment_user_ids=enrollment_user_id_values,
             packed_audio=packed_audio,
         )
 
@@ -682,6 +1143,15 @@ class RAGASRRetriever:
                 default_top_k=int(params.get("default_top_k", "50")),
                 cache_dir=params.get("cache_dir", "_retrieve_cache"),
                 device=params.get("device", "cuda"),
+                enrollment_store_dir=params.get(
+                    "enrollment_store_dir", "var/enrollments"
+                ),
+                enrollment_cache_max_entries=int(
+                    params.get("enrollment_cache_max_entries", "256")
+                ),
+                enrollment_cache_device=params.get(
+                    "enrollment_cache_device", "auto"
+                ),
             )
         )
 

@@ -93,6 +93,9 @@ class RetrievalConfig:
     default_top_k: int = 50
     cache_dir: Optional[str] = "var/retrieve_cache"
     batch_text: int = 512
+    enrollment_store_dir: str = "var/enrollments"
+    enrollment_cache_max_entries: int = 256
+    enrollment_cache_device: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,11 @@ class RagASRConfig:
             "adapter_hidden_dim": self.model.adapter_hidden_dim,
             "default_top_k": self.retrieval.default_top_k,
             "cache_dir": _resolve_path(self.retrieval.cache_dir, allow_special=True),
+            "enrollment_store_dir": _resolve_path(
+                self.retrieval.enrollment_store_dir
+            ),
+            "enrollment_cache_max_entries": self.retrieval.enrollment_cache_max_entries,
+            "enrollment_cache_device": self.retrieval.enrollment_cache_device,
             "device": self.runtime.device,
             "num_mel_bins": self.runtime.num_mel_bins,
             "batch_text": self.retrieval.batch_text,
@@ -158,6 +166,14 @@ class RagASRConfig:
             else str(self.model.adapter_hidden_dim),
             "default_top_k": str(self.retrieval.default_top_k),
             "cache_dir": _resolve_path(self.retrieval.cache_dir, allow_special=True) or "",
+            "enrollment_store_dir": _resolve_path(
+                self.retrieval.enrollment_store_dir
+            )
+            or "",
+            "enrollment_cache_max_entries": str(
+                self.retrieval.enrollment_cache_max_entries
+            ),
+            "enrollment_cache_device": self.retrieval.enrollment_cache_device,
             "device": self.runtime.device,
         }
         if self.model.adapter_ckpt:
