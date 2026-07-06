@@ -346,6 +346,8 @@ def main() -> None:
     delete_p.add_argument("words", nargs="*")
     delete_p.add_argument("--file", type=Path, action="append", default=[])
 
+    sub.add_parser("clear", help="clear the selected hotword pool")
+
     sub.add_parser("reload", help="reload hotword pool from server-side file")
 
     args = parser.parse_args()
@@ -373,6 +375,8 @@ def main() -> None:
             "delete",
             words=_collect_words(args.words, args.file),
         )
+    elif args.command == "clear":
+        output = _management_call(args, "clear")
     elif args.command == "reload":
         output = _management_call(args, "reload")
     else:

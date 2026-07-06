@@ -155,6 +155,18 @@ async def delete_hotword_pool(payload: dict[str, object] = Body(...)):
     )
 
 
+@app.post("/hotword-pool/clear")
+async def clear_hotword_pool(payload: dict[str, object] = Body(default_factory=dict)):
+    _reject_legacy_hotword_pool_fields(
+        user_id=payload.get("user_id") if "user_id" in payload else None,
+    )
+    return JSONResponse(
+        _require_retriever().clear_hotwords(
+            user_id=str(payload.get("hotword_pool_id") or "default"),
+        )
+    )
+
+
 @app.post("/hotword-pool/reload")
 async def reload_hotword_pool(payload: dict[str, object] = Body(default_factory=dict)):
     _reject_legacy_hotword_pool_fields(

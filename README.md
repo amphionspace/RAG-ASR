@@ -105,7 +105,7 @@ bash scripts/start_triton.sh
 推荐把在线路径拆成两个服务面：
 
 - Triton 推理面：`rag_asr_retrieve`，默认 HTTP `10001`、gRPC `10002`、metrics `10003`，负责音频检索、热词召回和 projector 输出。
-- HTTP 管理面：`scripts/serve_http.sh`，默认 `8080`，可用 `PORT=18080` 独立启动，负责热词池增删查、reload，以及 enrollment embedding 的 upsert/get/delete。
+- HTTP 管理面：`scripts/serve_http.sh`，默认 `8080`，可用 `PORT=18080` 独立启动，负责热词池增删查、清空、reload，以及 enrollment embedding 的 upsert/get/delete。
 
 先启动 Triton 推理面：
 
@@ -157,7 +157,7 @@ python examples/vllm_encoder_bypass.py \
 - `list --limit N`：最多显示 N 条已有热词，只控制查询结果分页大小，不影响热词库容量。
 - `list --query TEXT`：按子串过滤已有热词，用于确认某个热词是否已入库。
 - `list --offset N`：分页偏移量，和 `--limit` 配合浏览大词库。
-- `import FILE`、`add WORD...`、`delete WORD...`：兼容 Triton 管理命令；生产管理推荐调用 HTTP 管理面的 `/hotword-pool` 接口。
+- `import FILE`、`add WORD...`、`delete WORD...`、`clear`：兼容 Triton 管理命令；`delete` 按列表删除，`clear` 清空当前 `--hotword-pool-id` 指定的整池。生产管理推荐调用 HTTP 管理面的 `/hotword-pool` 接口。
 - `infer --wav FILE --top-k K`：对单条音频做检索，返回 `WORD_LIST`、`PROJECTOR_LEN` 和 `PROJECTOR_OUT` 形状；这里的 `--top-k` 是召回热词数量，和 `list --limit` 不同。
 
 ## 离线批量检索

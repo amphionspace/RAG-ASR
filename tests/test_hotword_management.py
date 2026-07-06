@@ -90,6 +90,21 @@ def test_retriever_add_delete_and_persist(tmp_path) -> None:
     assert (tmp_path / "pools" / "default.txt").read_text(encoding="utf-8") == "上海\n北京\n"
 
 
+def test_retriever_clear_hotwords_persists_empty_pool(tmp_path) -> None:
+    retriever = _fake_retriever(tmp_path)
+    default_pool = retriever._get_or_load_pool("default")
+
+    clear = retriever.clear_hotwords(user_id="default")
+
+    assert clear["action"] == "clear"
+    assert clear["cleared"] == 2
+    assert clear["total_count"] == 0
+    assert clear["hotword_pool_id"] == "default"
+    assert default_pool.words == []
+    assert default_pool.embs_gpu.shape == (0, 4)
+    assert (tmp_path / "pools" / "default.txt").read_text(encoding="utf-8") == ""
+
+
 def test_retriever_isolates_hotwords_by_user(tmp_path) -> None:
     retriever = _fake_retriever(tmp_path)
 
@@ -101,6 +116,14 @@ def test_retriever_isolates_hotwords_by_user(tmp_path) -> None:
     assert retriever.list_hotwords(user_id="default")["hotwords"] == ["Foo", "北京"]
 
     assert (tmp_path / "pools" / "user-a.txt").read_text(encoding="utf-8") == "上海\n"
+    assert (tmp_path / "pools" / "user-b.txt").read_text(encoding="utf-8") == "深圳\n"
+
+    retriever.clear_hotwords(user_id="user-a")
+
+    assert retriever.list_hotwords(user_id="user-a")["hotwords"] == []
+    assert retriever.list_hotwords(user_id="user-b")["hotwords"] == ["深圳"]
+    assert retriever.list_hotwords(user_id="default")["hotwords"] == ["Foo", "北京"]
+    assert (tmp_path / "pools" / "user-a.txt").read_text(encoding="utf-8") == ""
     assert (tmp_path / "pools" / "user-b.txt").read_text(encoding="utf-8") == "深圳\n"
 
 
