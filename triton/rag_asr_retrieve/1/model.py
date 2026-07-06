@@ -399,6 +399,11 @@ class TritonPythonModel:
                         user_id=hotword_pool_id,
                     )
                     responses[i] = _management_response(summary, requested_outputs)
+                elif action == "clear":
+                    if not control:
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
+                    summary = self.retriever.clear_hotwords(user_id=hotword_pool_id)
+                    responses[i] = _management_response(summary, requested_outputs)
                 elif action == "reload":
                     if not control:
                         hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")

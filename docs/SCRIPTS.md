@@ -7,7 +7,7 @@
 | 脚本 | 语义 |
 |------|------|
 | `scripts/start_triton.sh` | 启动 Triton 在线服务；读取 `configs/serve.yaml` 或 `RAG_ASR_CONFIG`，渲染运行时 model repository 到 `var/triton_repo` |
-| `scripts/serve_http.sh` | 启动 HTTP 管理/调试服务；提供热词池管理、enrollment embedding 管理和 `/retrieve` 调试接口 |
+| `scripts/serve_http.sh` | 启动 HTTP 管理/调试服务；提供热词池查询、增删、清空、重载，enrollment embedding 管理和 `/retrieve` 调试接口 |
 | `scripts/hotword_status.sh` | 查看当前 Triton 热词服务 live/ready、指定热词池总量、样例热词和关键配置；默认连 `localhost:10001`、热词池为 `default` |
 | `scripts/triton_hotword_client.py` | Triton 热词客户端；使用 `--hotword-pool-id` 指定热词池 ID；生产管理推荐使用 HTTP 管理服务 |
 | `scripts/infer.sh` | 离线批量检索，用于数据集评测或生成 `hw_map` |
@@ -51,7 +51,7 @@
 | 脚本 | 语义 |
 |------|------|
 | `scripts/serve_http.sh` | 本地 FastAPI 管理/调试服务；默认端口 8080，可用 `PORT=18080` 给 AudioLLM 灰度管理链路使用；生产/灰度建议通过 `RAG_ASR_TRITON_CONDA_ENV=triton-exec310` 指向包含模型依赖和 FastAPI/uvicorn 的 Python 3.10 执行环境 |
-| `scripts/serve_http.py` | `serve_http.sh` 调用的 Python 服务实现，包含 `/hotword-pool`、`/enrollments/{enrollment_id}` 和 `/retrieve`；支持 `--enrollment-store-dir` 与 `--enrollment-metadata-touch-interval-sec` 临时覆盖 enrollment 落盘目录和 metadata 写回节流 |
+| `scripts/serve_http.py` | `serve_http.sh` 调用的 Python 服务实现，包含 `/hotword-pool`、`/hotword-pool/clear`、`/enrollments/{enrollment_id}` 和 `/retrieve`；支持 `--enrollment-store-dir` 与 `--enrollment-metadata-touch-interval-sec` 临时覆盖 enrollment 落盘目录和 metadata 写回节流 |
 
 ## 离线内部依赖
 

@@ -618,6 +618,24 @@ class RAGASRRetriever:
             "duplicates": batch.duplicates,
         }
 
+    def clear_hotwords(self, *, user_id: Optional[str] = None) -> dict[str, object]:
+        """Clear one hotword pool and persist the empty runtime pool."""
+
+        pool = self._get_or_load_pool(user_id)
+        with pool.lock:
+            cleared = len(pool.words)
+            embs = torch.empty((0, self.cfg.embed_dim), dtype=torch.float32)
+            self._set_pool_locked(pool, [], embs)
+        return {
+            "action": "clear",
+            "status": "ok",
+            "message": f"cleared {cleared} hotwords",
+            "hotword_pool_id": pool.user_id,
+            "hotwords": [],
+            "total_count": 0,
+            "cleared": cleared,
+        }
+
     def reload_hotwords(self, *, user_id: Optional[str] = None) -> dict[str, object]:
         """Reload the configured pool file, rebuild embeddings, and refresh cache."""
 

@@ -420,6 +420,7 @@ curl -X POST http://localhost:8080/retrieve \
 | `/hotword-pool` | `GET` | `hotword_pool_id`，可选 `query`、`limit`、`offset` | 查询热词池 |
 | `/hotword-pool` | `POST` | JSON: `hotword_pool_id`、`hotwords` | 新增热词 |
 | `/hotword-pool` | `DELETE` | JSON: `hotword_pool_id`、`hotwords` | 删除热词 |
+| `/hotword-pool/clear` | `POST` | JSON: `hotword_pool_id` | 清空指定热词池 |
 | `/hotword-pool/reload` | `POST` | JSON: `hotword_pool_id` | 从词池文件重载 |
 | `/enrollments/{enrollment_id}` | `POST` | multipart `file`：float32 PCM bytes；form: `enrollment_scope_id`、`sample_rate` | 推理并保存注册人 embedding；同 ID 同音频会幂等复用已有 embedding |
 | `/enrollments/{enrollment_id}` | `GET` | query: `enrollment_scope_id` | 查询注册人 embedding 元数据；不兼容 tensor 返回 `status=incompatible` |
@@ -468,9 +469,10 @@ Enrollment metadata 会写入 `audio_hash`、`sample_rate`、`duration_sec`、`s
 
 - `ACTION` 未传时按音频检索执行。
 - `HOTWORD_POOL_ID` 未传时使用 `retrieval.default_user`，默认是 `default`。
-- Triton 内的 `ACTION=list/add/delete/reload` 作为诊断能力保留；AudioLLM 新链路应使用 HTTP 管理服务。
+- Triton 内的 `ACTION=list/add/delete/clear/reload` 作为诊断能力保留；AudioLLM 新链路应使用 HTTP 管理服务。
 - `add` 会在同一个 Triton 模型实例内用已加载的 `tokenizer + text_tower + adapter` 为新增热词生成 embedding，并立即加入该热词池常驻显存的词池 embedding。
 - `delete` 按规范化后的 dedupe key 删除当前热词池内的热词，英文/拉丁默认大小写不敏感，中文保持词面 exact。
+- `clear` 清空当前热词池的内存词表、显存 embedding、运行时池文件和 text embedding cache；不会影响其他 `hotword_pool_id`。
 - `list` 显示当前热词池在服务内存里的已有热词库，可分页返回，避免一次性拉取大词库。
 - `import` 是客户端命令：客户端读取本地 txt/json 后把热词数组发给 Triton；服务端不会读取客户端传来的任意文件路径。
 - 管理操作会把规范化后的词库写回 `retrieval.hotword_pool_dir/<hotword_pool_id>.txt`（或 default 池的显式 `retrieval.hotword_pool_file` 覆盖），并覆盖刷新该词池的 text embedding cache，保证重启后词库一致。
