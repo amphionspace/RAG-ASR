@@ -421,11 +421,13 @@ curl -X POST http://localhost:8080/retrieve \
 | `/hotword-pool` | `POST` | JSON: `hotword_pool_id`、`hotwords` | 新增热词 |
 | `/hotword-pool` | `DELETE` | JSON: `hotword_pool_id`、`hotwords` | 删除热词 |
 | `/hotword-pool/reload` | `POST` | JSON: `hotword_pool_id` | 从词池文件重载 |
-| `/enrollments/{enrollment_id}` | `POST` | multipart `file`：float32 PCM bytes；form: `enrollment_user_id`、`sample_rate` | 推理并保存注册人 embedding |
-| `/enrollments/{enrollment_id}` | `GET` | query: `enrollment_user_id` | 查询注册人 embedding 元数据 |
+| `/enrollments/{enrollment_id}` | `POST` | multipart `file`：float32 PCM bytes；form: `enrollment_user_id`、`sample_rate` | 推理并保存注册人 embedding；同 ID 同音频会幂等复用已有 embedding |
+| `/enrollments/{enrollment_id}` | `GET` | query: `enrollment_user_id` | 查询注册人 embedding 元数据；不兼容 tensor 返回 `status=incompatible` |
 | `/enrollments/{enrollment_id}` | `DELETE` | query: `enrollment_user_id` | 删除注册人 embedding 与元数据 |
 
-Enrollment HTTP 管理面只接收临时音频并保存 embedding tensor，不持久化注册人原始音频。持久化路径由 `retrieval.enrollment_store_dir` 控制，默认是 `var/enrollments/`。
+Enrollment HTTP 管理面只接收临时音频并保存 embedding tensor，不持久化注册人原始音频。持久化路径由 `retrieval.enrollment_store_dir` 控制，默认是 `var/enrollments/`。`POST /enrollments/{enrollment_id}` 响应会包含 `skipped` 与 `overwritten`：`skipped=true` 表示同一 `enrollment_user_id + enrollment_id` 下已有相同 `audio_hash`、`sample_rate` 和可用 tensor，服务跳过 projector 计算和 `.pt` 重写；`overwritten=true` 表示同 ID 的旧 embedding 被新音频覆盖。重复注册命中缓存时还会返回 `cache_hit`。
+
+Enrollment metadata 会写入 `audio_hash`、`sample_rate`、`duration_sec`、`shape`、`created_at`、`updated_at`、`last_used_at`，以及新注册数据的 `base_model_path`、`adapter_ckpt`、`projector_dim`、`embed_dim`。读取时如果 `projector_dim` 或 `embed_dim` 与当前服务不兼容，管理查询返回 `status=incompatible`；推理路径会拒绝使用该 enrollment。读取命中内存缓存时，`last_used_at` 会先在内存更新，并按 `retrieval.enrollment_metadata_touch_interval_sec` 节流写回 `.json`，避免高频请求反复写小文件。
 
 ### Triton 模型接口（`rag_asr_retrieve`）
 
@@ -642,6 +644,7 @@ Triton 自带 CUDA 13 runtime，与主机驱动 12.8 不匹配时，Triton 侧�
 - `retrieval.enrollment_store_dir`：注册人 embedding tensor 与元数据落盘目录，默认 `var/enrollments`。
 - `retrieval.enrollment_cache_max_entries`：运行时 enrollment embedding LRU 缓存容量。
 - `retrieval.enrollment_cache_device`：enrollment embedding 缓存设备，`auto` 时优先 GPU，必要时回落 CPU。
+- `retrieval.enrollment_metadata_touch_interval_sec`：缓存命中时 `last_used_at` 写回 metadata 的最小间隔，默认 `300` 秒；设为 `0` 时每次命中都写回。
 - `retrieval.default_top_k`、`retrieval.cache_dir`、`runtime.device`。
 - `triton.exec_env`、`triton.http_port`、`triton.grpc_port`、`triton.metrics_port`、`triton.rendered_model_repo`。
 
