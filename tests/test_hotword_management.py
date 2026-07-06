@@ -55,8 +55,10 @@ def _fake_retriever(tmp_path) -> RAGASRRetriever:
         enrollment_store_dir=str(tmp_path / "enrollments"),
         enrollment_cache_max_entries=4,
         enrollment_cache_device="cpu",
+        enrollment_metadata_touch_interval_sec=300.0,
     )
     retriever._device = torch.device("cpu")
+    retriever.projector_dim = 4
     retriever.default_user = "default"
     retriever._pools_lock = threading.RLock()
     retriever._pools = {}
@@ -126,6 +128,8 @@ def test_enrollment_upsert_get_delete_persists_tensor(tmp_path) -> None:
     tensor_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.pt"
     meta_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.json"
     assert summary["status"] == "ok"
+    assert summary["skipped"] is False
+    assert summary["overwritten"] is False
     assert tensor_path.is_file()
     assert meta_path.is_file()
     assert torch.equal(torch.load(tensor_path), torch.ones(3, 4))
@@ -133,6 +137,10 @@ def test_enrollment_upsert_get_delete_persists_tensor(tmp_path) -> None:
     assert meta["user_id"] == "tenant-a"
     assert meta["enrollment_id"] == "speaker-1"
     assert meta["shape"] == [3, 4]
+    assert meta["base_model_path"] == "base"
+    assert meta["adapter_ckpt"] == "adapter"
+    assert meta["projector_dim"] == 4
+    assert meta["embed_dim"] == 4
 
     retriever._enrollment_cache.clear()
     fetched = retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
@@ -144,6 +152,175 @@ def test_enrollment_upsert_get_delete_persists_tensor(tmp_path) -> None:
     assert deleted["deleted"] is True
     assert not tensor_path.exists()
     assert not meta_path.exists()
+
+
+def test_enrollment_repeated_upsert_same_audio_skips_projection_and_tensor_write(
+    tmp_path,
+) -> None:
+    retriever = _fake_retriever(tmp_path)
+    calls = {"project": 0}
+
+    def project(wav, sample_rate):
+        calls["project"] += 1
+        return np.ones((3, 4), dtype=np.float32)
+
+    retriever._project_audio = project
+    audio = np.zeros(16000, dtype=np.float32)
+    first = retriever.upsert_enrollment(
+        audio,
+        sample_rate=16000,
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+    )
+    assert first["skipped"] is False
+    assert first["overwritten"] is False
+    assert calls["project"] == 1
+
+    retriever._project_audio = lambda wav, sample_rate: pytest.fail(
+        "projector should not run for unchanged enrollment"
+    )
+    second = retriever.upsert_enrollment(
+        audio,
+        sample_rate=16000,
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+    )
+    assert second["skipped"] is True
+    assert second["overwritten"] is False
+    assert second["cache_hit"] is True
+
+    retriever._enrollment_cache.clear()
+    third = retriever.upsert_enrollment(
+        audio,
+        sample_rate=16000,
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+    )
+    assert third["skipped"] is True
+    assert third["cache_hit"] is False
+
+
+def test_enrollment_repeated_upsert_different_audio_overwrites(tmp_path) -> None:
+    retriever = _fake_retriever(tmp_path)
+    retriever._project_audio = lambda wav, sample_rate: np.ones(
+        (3, 4),
+        dtype=np.float32,
+    )
+    first = retriever.upsert_enrollment(
+        np.zeros(16000, dtype=np.float32),
+        sample_rate=16000,
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+    )
+    meta_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.json"
+    first_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    retriever._project_audio = lambda wav, sample_rate: np.full(
+        (3, 4),
+        2.0,
+        dtype=np.float32,
+    )
+    second = retriever.upsert_enrollment(
+        np.ones(16000, dtype=np.float32),
+        sample_rate=16000,
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+    )
+    tensor_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.pt"
+    second_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    assert first["audio_hash"] != second["audio_hash"]
+    assert second["skipped"] is False
+    assert second["overwritten"] is True
+    assert torch.equal(torch.load(tensor_path), torch.full((3, 4), 2.0))
+    assert second_meta["created_at"] == first_meta["created_at"]
+    assert second_meta["updated_at"] >= first_meta["updated_at"]
+
+
+def test_enrollment_metadata_touch_is_throttled(tmp_path) -> None:
+    retriever = _fake_retriever(tmp_path)
+    now = {"value": 1000.0}
+    retriever._now = lambda: now["value"]
+    retriever._project_audio = lambda wav, sample_rate: np.ones(
+        (3, 4),
+        dtype=np.float32,
+    )
+    retriever.upsert_enrollment(
+        np.zeros(16000, dtype=np.float32),
+        sample_rate=16000,
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+    )
+    meta_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.json"
+    initial_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    now["value"] = 1100.0
+    fetched = retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    assert fetched["cache_hit"] is True
+    throttled_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert throttled_meta["last_used_at"] == initial_meta["last_used_at"]
+
+    now["value"] = 1401.0
+    retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    touched_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert touched_meta["last_used_at"] == 1401.0
+
+
+def test_enrollment_incompatible_projector_dim_rejected(tmp_path) -> None:
+    retriever = _fake_retriever(tmp_path)
+    retriever._project_audio = lambda wav, sample_rate: np.ones(
+        (3, 4),
+        dtype=np.float32,
+    )
+    retriever.upsert_enrollment(
+        np.zeros(16000, dtype=np.float32),
+        sample_rate=16000,
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+    )
+    meta_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["projector_dim"] = 8
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    retriever._enrollment_cache.clear()
+
+    fetched = retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    assert fetched["status"] == "incompatible"
+    assert "incompatible" in fetched["message"]
+
+
+def test_enrollment_cache_still_evicts_lru(tmp_path) -> None:
+    retriever = _fake_retriever(tmp_path)
+    retriever.cfg.enrollment_cache_max_entries = 2
+    tensor = torch.ones(1, 4)
+    meta = {
+        "projector_dim": 4,
+        "embed_dim": 4,
+        "last_used_at": 1.0,
+    }
+    retriever._cache_enrollment_locked(
+        user_id="tenant-a",
+        enrollment_id="speaker-1",
+        tensor=tensor,
+        meta=meta,
+    )
+    retriever._cache_enrollment_locked(
+        user_id="tenant-a",
+        enrollment_id="speaker-2",
+        tensor=tensor,
+        meta=meta,
+    )
+    retriever._load_enrollment_locked(user_id="tenant-a", enrollment_id="speaker-1")
+    retriever._cache_enrollment_locked(
+        user_id="tenant-a",
+        enrollment_id="speaker-3",
+        tensor=tensor,
+        meta=meta,
+    )
+
+    assert ("tenant-a", "speaker-1") in retriever._enrollment_cache
+    assert ("tenant-a", "speaker-2") not in retriever._enrollment_cache
+    assert ("tenant-a", "speaker-3") in retriever._enrollment_cache
 
 
 def test_enrollment_rejects_unsafe_id(tmp_path) -> None:

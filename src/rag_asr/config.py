@@ -96,6 +96,7 @@ class RetrievalConfig:
     enrollment_store_dir: str = "var/enrollments"
     enrollment_cache_max_entries: int = 256
     enrollment_cache_device: str = "auto"
+    enrollment_metadata_touch_interval_sec: float = 300.0
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,9 @@ class RagASRConfig:
             ),
             "enrollment_cache_max_entries": self.retrieval.enrollment_cache_max_entries,
             "enrollment_cache_device": self.retrieval.enrollment_cache_device,
+            "enrollment_metadata_touch_interval_sec": (
+                self.retrieval.enrollment_metadata_touch_interval_sec
+            ),
             "device": self.runtime.device,
             "num_mel_bins": self.runtime.num_mel_bins,
             "batch_text": self.retrieval.batch_text,
@@ -174,6 +178,9 @@ class RagASRConfig:
                 self.retrieval.enrollment_cache_max_entries
             ),
             "enrollment_cache_device": self.retrieval.enrollment_cache_device,
+            "enrollment_metadata_touch_interval_sec": str(
+                self.retrieval.enrollment_metadata_touch_interval_sec
+            ),
             "device": self.runtime.device,
         }
         if self.model.adapter_ckpt:

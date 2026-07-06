@@ -51,7 +51,7 @@
 | 脚本 | 语义 |
 |------|------|
 | `scripts/serve_http.sh` | 本地 FastAPI 管理/调试服务；默认端口 8080，可用 `PORT=18080` 给 AudioLLM 灰度管理链路使用；生产/灰度建议通过 `RAG_ASR_TRITON_CONDA_ENV=triton-exec310` 指向包含模型依赖和 FastAPI/uvicorn 的 Python 3.10 执行环境 |
-| `scripts/serve_http.py` | `serve_http.sh` 调用的 Python 服务实现，包含 `/hotword-pool`、`/enrollments/{enrollment_id}` 和 `/retrieve` |
+| `scripts/serve_http.py` | `serve_http.sh` 调用的 Python 服务实现，包含 `/hotword-pool`、`/enrollments/{enrollment_id}` 和 `/retrieve`；支持 `--enrollment-store-dir` 与 `--enrollment-metadata-touch-interval-sec` 临时覆盖 enrollment 落盘目录和 metadata 写回节流 |
 
 ## 离线内部依赖
 
