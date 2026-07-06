@@ -104,10 +104,10 @@ def test_retriever_isolates_hotwords_by_user(tmp_path) -> None:
     assert (tmp_path / "pools" / "user-b.txt").read_text(encoding="utf-8") == "深圳\n"
 
 
-def test_retriever_rejects_unsafe_user_id(tmp_path) -> None:
+def test_retriever_rejects_unsafe_hotword_pool_id(tmp_path) -> None:
     retriever = _fake_retriever(tmp_path)
 
-    with pytest.raises(ValueError, match="USER_ID"):
+    with pytest.raises(ValueError, match="HOTWORD_POOL_ID"):
         retriever.list_hotwords(user_id="../escape")
 
 
@@ -121,7 +121,7 @@ def test_enrollment_upsert_get_delete_persists_tensor(tmp_path) -> None:
     summary = retriever.upsert_enrollment(
         np.zeros(16000, dtype=np.float32),
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
 
@@ -134,7 +134,7 @@ def test_enrollment_upsert_get_delete_persists_tensor(tmp_path) -> None:
     assert meta_path.is_file()
     assert torch.equal(torch.load(tensor_path), torch.ones(3, 4))
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta["user_id"] == "tenant-a"
+    assert meta["enrollment_scope_id"] == "tenant-a"
     assert meta["enrollment_id"] == "speaker-1"
     assert meta["shape"] == [3, 4]
     assert meta["base_model_path"] == "base"
@@ -143,12 +143,13 @@ def test_enrollment_upsert_get_delete_persists_tensor(tmp_path) -> None:
     assert meta["embed_dim"] == 4
 
     retriever._enrollment_cache.clear()
-    fetched = retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    fetched = retriever.get_enrollment(enrollment_scope_id="tenant-a", enrollment_id="speaker-1")
     assert fetched["status"] == "ok"
+    assert fetched["enrollment_scope_id"] == "tenant-a"
     assert fetched["shape"] == [3, 4]
     assert fetched["cache_hit"] is False
 
-    deleted = retriever.delete_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    deleted = retriever.delete_enrollment(enrollment_scope_id="tenant-a", enrollment_id="speaker-1")
     assert deleted["deleted"] is True
     assert not tensor_path.exists()
     assert not meta_path.exists()
@@ -169,7 +170,7 @@ def test_enrollment_repeated_upsert_same_audio_skips_projection_and_tensor_write
     first = retriever.upsert_enrollment(
         audio,
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
     assert first["skipped"] is False
@@ -182,7 +183,7 @@ def test_enrollment_repeated_upsert_same_audio_skips_projection_and_tensor_write
     second = retriever.upsert_enrollment(
         audio,
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
     assert second["skipped"] is True
@@ -193,7 +194,7 @@ def test_enrollment_repeated_upsert_same_audio_skips_projection_and_tensor_write
     third = retriever.upsert_enrollment(
         audio,
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
     assert third["skipped"] is True
@@ -209,7 +210,7 @@ def test_enrollment_repeated_upsert_different_audio_overwrites(tmp_path) -> None
     first = retriever.upsert_enrollment(
         np.zeros(16000, dtype=np.float32),
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
     meta_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.json"
@@ -223,7 +224,7 @@ def test_enrollment_repeated_upsert_different_audio_overwrites(tmp_path) -> None
     second = retriever.upsert_enrollment(
         np.ones(16000, dtype=np.float32),
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
     tensor_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.pt"
@@ -248,20 +249,20 @@ def test_enrollment_metadata_touch_is_throttled(tmp_path) -> None:
     retriever.upsert_enrollment(
         np.zeros(16000, dtype=np.float32),
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
     meta_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.json"
     initial_meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
     now["value"] = 1100.0
-    fetched = retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    fetched = retriever.get_enrollment(enrollment_scope_id="tenant-a", enrollment_id="speaker-1")
     assert fetched["cache_hit"] is True
     throttled_meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert throttled_meta["last_used_at"] == initial_meta["last_used_at"]
 
     now["value"] = 1401.0
-    retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    retriever.get_enrollment(enrollment_scope_id="tenant-a", enrollment_id="speaker-1")
     touched_meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert touched_meta["last_used_at"] == 1401.0
 
@@ -275,7 +276,7 @@ def test_enrollment_incompatible_projector_dim_rejected(tmp_path) -> None:
     retriever.upsert_enrollment(
         np.zeros(16000, dtype=np.float32),
         sample_rate=16000,
-        user_id="tenant-a",
+        enrollment_scope_id="tenant-a",
         enrollment_id="speaker-1",
     )
     meta_path = tmp_path / "enrollments" / "tenant-a" / "speaker-1.json"
@@ -284,7 +285,7 @@ def test_enrollment_incompatible_projector_dim_rejected(tmp_path) -> None:
     meta_path.write_text(json.dumps(meta), encoding="utf-8")
     retriever._enrollment_cache.clear()
 
-    fetched = retriever.get_enrollment(user_id="tenant-a", enrollment_id="speaker-1")
+    fetched = retriever.get_enrollment(enrollment_scope_id="tenant-a", enrollment_id="speaker-1")
     assert fetched["status"] == "incompatible"
     assert "incompatible" in fetched["message"]
 
@@ -327,7 +328,7 @@ def test_enrollment_rejects_unsafe_id(tmp_path) -> None:
     retriever = _fake_retriever(tmp_path)
 
     with pytest.raises(ValueError, match="ENROLLMENT_ID"):
-        retriever.get_enrollment(user_id="default", enrollment_id="../escape")
+        retriever.get_enrollment(enrollment_scope_id="default", enrollment_id="../escape")
 
 
 def test_results_can_disable_hotword_recall(tmp_path) -> None:

@@ -59,8 +59,8 @@ startup asks systemd to start RAG-ASR before AudioLLM.
 
 - 基座：`checkpoints/base/amphion_1.7b_merged`（`config.model_type=qwen3_asr`，目录名沿用历史命名）
 - Adapter：`checkpoints/base/amphion_1.7b_merged/hotword_adapter/best_adapter.pt`
-- 词池：默认以 `examples/hotword_pool.txt` 作为只读种子，运行时可变词池写到 `var/hotwords/<hotword_pool_id>.txt`；旧协议字段 `USER_ID` / `--user` 的实际语义也是热词池 ID
-- Enrollment：只持久化推理后的 embedding tensor 与元数据，默认写到 `var/enrollments/{enrollment_user_id}/{enrollment_id}.pt` 和同名 `.json`
+- 词池：默认以 `examples/hotword_pool.txt` 作为只读种子，运行时可变词池写到 `var/hotwords/<hotword_pool_id>.txt`；公开协议只使用 `hotword_pool_id` / `HOTWORD_POOL_ID`
+- Enrollment：只持久化推理后的 embedding tensor 与元数据，默认写到 `var/enrollments/{enrollment_scope_id}/{enrollment_id}.pt` 和同名 `.json`；`enrollment_scope_id` 是声纹注册隔离域，不是业务用户 ID
 - 配置入口：`configs/serve.yaml`
 
 ---
@@ -386,16 +386,16 @@ python examples/triton_client_example.py \
 python examples/triton_recall_check.py --url localhost:10001
 ```
 
-Triton 直连客户端可用于兼容测试和诊断；`--user` 是旧参数名，实际语义是热词池 ID：
+Triton 直连客户端可用于测试和诊断；使用 `--hotword-pool-id` 指定热词池 ID：
 
 ```bash
 # 显示已有热词库，支持分页和子串过滤
 python scripts/triton_hotword_client.py --url localhost:10001 list --limit 20
 python scripts/triton_hotword_client.py --url localhost:10001 list --query 北京 --limit 20
-python scripts/triton_hotword_client.py --url localhost:10001 --user tenant-a list --limit 20
+python scripts/triton_hotword_client.py --url localhost:10001 --hotword-pool-id tenant-a list --limit 20
 
 # 音频检索返回 projector 与热词召回结果
-python scripts/triton_hotword_client.py --url localhost:10001 --user tenant-a infer \
+python scripts/triton_hotword_client.py --url localhost:10001 --hotword-pool-id tenant-a infer \
   --wav examples/audio/cv_zh_33411896.wav \
   --top-k 50
 ```
@@ -421,11 +421,13 @@ curl -X POST http://localhost:8080/retrieve \
 | `/hotword-pool` | `POST` | JSON: `hotword_pool_id`、`hotwords` | 新增热词 |
 | `/hotword-pool` | `DELETE` | JSON: `hotword_pool_id`、`hotwords` | 删除热词 |
 | `/hotword-pool/reload` | `POST` | JSON: `hotword_pool_id` | 从词池文件重载 |
-| `/enrollments/{enrollment_id}` | `POST` | multipart `file`：float32 PCM bytes；form: `enrollment_user_id`、`sample_rate` | 推理并保存注册人 embedding；同 ID 同音频会幂等复用已有 embedding |
-| `/enrollments/{enrollment_id}` | `GET` | query: `enrollment_user_id` | 查询注册人 embedding 元数据；不兼容 tensor 返回 `status=incompatible` |
-| `/enrollments/{enrollment_id}` | `DELETE` | query: `enrollment_user_id` | 删除注册人 embedding 与元数据 |
+| `/enrollments/{enrollment_id}` | `POST` | multipart `file`：float32 PCM bytes；form: `enrollment_scope_id`、`sample_rate` | 推理并保存注册人 embedding；同 ID 同音频会幂等复用已有 embedding |
+| `/enrollments/{enrollment_id}` | `GET` | query: `enrollment_scope_id` | 查询注册人 embedding 元数据；不兼容 tensor 返回 `status=incompatible` |
+| `/enrollments/{enrollment_id}` | `DELETE` | query: `enrollment_scope_id` | 删除注册人 embedding 与元数据 |
 
-Enrollment HTTP 管理面只接收临时音频并保存 embedding tensor，不持久化注册人原始音频。持久化路径由 `retrieval.enrollment_store_dir` 控制，默认是 `var/enrollments/`。`POST /enrollments/{enrollment_id}` 响应会包含 `skipped` 与 `overwritten`：`skipped=true` 表示同一 `enrollment_user_id + enrollment_id` 下已有相同 `audio_hash`、`sample_rate` 和可用 tensor，服务跳过 projector 计算和 `.pt` 重写；`overwritten=true` 表示同 ID 的旧 embedding 被新音频覆盖。重复注册命中缓存时还会返回 `cache_hit`。
+Enrollment HTTP 管理面只接收临时音频并保存 embedding tensor，不持久化注册人原始音频。持久化路径由 `retrieval.enrollment_store_dir` 控制，默认是 `var/enrollments/`。`POST /enrollments/{enrollment_id}` 响应会包含 `skipped` 与 `overwritten`：`skipped=true` 表示同一 `enrollment_scope_id + enrollment_id` 下已有相同 `audio_hash`、`sample_rate` 和可用 tensor，服务跳过 projector 计算和 `.pt` 重写；`overwritten=true` 表示同 ID 的旧 embedding 被新音频覆盖。重复注册命中缓存时还会返回 `cache_hit`。
+
+旧字段 `enrollment_user_id` / `user_id` 不再作为 enrollment scope 或热词池兼容别名；传入这些字段会返回 400。
 
 Enrollment metadata 会写入 `audio_hash`、`sample_rate`、`duration_sec`、`shape`、`created_at`、`updated_at`、`last_used_at`，以及新注册数据的 `base_model_path`、`adapter_ckpt`、`projector_dim`、`embed_dim`。读取时如果 `projector_dim` 或 `embed_dim` 与当前服务不兼容，管理查询返回 `status=incompatible`；推理路径会拒绝使用该 enrollment。读取命中内存缓存时，`last_used_at` 会先在内存更新，并按 `retrieval.enrollment_metadata_touch_interval_sec` 节流写回 `.json`，避免高频请求反复写小文件。
 
@@ -436,11 +438,12 @@ Enrollment metadata 会写入 `audio_hash`、`sample_rate`、`duration_sec`、`s
 | 名称 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `WAV` | FP32 | 检索必填 | 一维波形 |
-| `USER_ID` | STRING | 否 | 兼容字段名，实际语义是热词池 ID，默认 `default`；不同热词池互相隔离 |
+| `HOTWORD_POOL_ID` | STRING | 否 | 热词池 ID，默认 `default`；不同热词池互相隔离 |
 | `SAMPLE_RATE` | INT32 | 否 | 默认 16000 |
 | `TOP_K` | INT32 | 否 | 默认 50（见 `config.pbtxt`） |
 | `ENABLE_HOTWORD_RECALL` | UINT8 | 否 | `1` 时启用热词召回，`0` 时跳过热词召回 |
 | `ENROLLMENT_ID` | STRING | 否 | 可选注册人 ID；新链路推荐通过 HTTP 管理面维护对应 embedding |
+| `ENROLLMENT_SCOPE_ID` | STRING | 否 | 可选注册隔离域；默认跟随热词池 ID |
 | `WANT_TARGET_AUDIO_EMBEDS` | UINT8 | 否 | 是否返回目标音频 embedding |
 | `WANT_ENROLLMENT_AUDIO_EMBEDS` | UINT8 | 否 | 是否返回注册人 enrollment embedding |
 | `ACTION` / `HOTWORDS` / `QUERY` / `LIMIT` / `OFFSET` | 多类型 | 否 | 旧 Triton 管理兼容字段；生产管理推荐使用 HTTP 管理面 |
@@ -463,9 +466,9 @@ Enrollment metadata 会写入 `audio_hash`、`sample_rate`、`duration_sec`、`s
 
 兼容说明：
 
-- `ACTION` 未传时保持旧客户端兼容，仍按音频检索执行。
-- `USER_ID` 未传时使用 `retrieval.default_user`，默认是 `default`；这里的 “user” 是历史命名，语义应理解为 `hotword_pool_id`。
-- Triton 内的 `ACTION=list/add/delete/reload` 仅作为旧客户端兼容和诊断能力保留；AudioLLM 新链路应使用 HTTP 管理服务。
+- `ACTION` 未传时按音频检索执行。
+- `HOTWORD_POOL_ID` 未传时使用 `retrieval.default_user`，默认是 `default`。
+- Triton 内的 `ACTION=list/add/delete/reload` 作为诊断能力保留；AudioLLM 新链路应使用 HTTP 管理服务。
 - `add` 会在同一个 Triton 模型实例内用已加载的 `tokenizer + text_tower + adapter` 为新增热词生成 embedding，并立即加入该热词池常驻显存的词池 embedding。
 - `delete` 按规范化后的 dedupe key 删除当前热词池内的热词，英文/拉丁默认大小写不敏感，中文保持词面 exact。
 - `list` 显示当前热词池在服务内存里的已有热词库，可分页返回，避免一次性拉取大词库。
@@ -639,7 +642,7 @@ Triton 自带 CUDA 13 runtime，与主机驱动 12.8 不匹配时，Triton 侧�
 - `model.adapter_ckpt`：可选旧式显式 adapter 路径，设置后优先级高于内置目录。
 - `retrieval.hotword_pool_dir`：运行时热词池目录，默认 `var/hotwords`；文件名按 `hotword_pool_id` 隔离。
 - `retrieval.seed_pool_file`：只读种子词池，默认 `examples/hotword_pool.txt`，用于初始化 default 用户。
-- `retrieval.default_user`：未传 `USER_ID` / `hotword_pool_id` 时使用的默认热词池 ID，默认 `default`。字段名保留历史兼容。
+- `retrieval.default_user`：未传 `HOTWORD_POOL_ID` / `hotword_pool_id` 时使用的默认热词池 ID，默认 `default`。字段名是内部配置名，公开协议不再使用 `user_id`。
 - `retrieval.hotword_pool_file`：可选兼容字段；设置后作为 default 用户运行时词池文件的显式覆盖。
 - `retrieval.enrollment_store_dir`：注册人 embedding tensor 与元数据落盘目录，默认 `var/enrollments`。
 - `retrieval.enrollment_cache_max_entries`：运行时 enrollment embedding LRU 缓存容量。

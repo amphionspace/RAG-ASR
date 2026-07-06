@@ -250,7 +250,7 @@ class TritonPythonModel:
         sample_rates = []
         top_ks = []
         hotword_pool_ids = []
-        enrollment_user_ids = []
+        enrollment_scope_ids = []
         enrollment_ids = []
         enable_hotword_recalls = []
         want_target_audio_embeds = []
@@ -275,19 +275,18 @@ class TritonPythonModel:
             ).strip().lower()
             hotword_pool_id = (
                 _control_string(control, "hotword_pool_id")
-                or _control_string(control, "user_id")
             )
             enrollment_id = _control_string(control, "enrollment_id")
-            enrollment_user_id = _control_string(control, "enrollment_user_id")
+            enrollment_scope_id = _control_string(control, "enrollment_scope_id")
             try:
                 if action in {"infer", "retrieve"}:
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                         if _optional_bool(request, "WANT_ENROLLMENT_AUDIO_EMBEDS", False):
                             enrollment_id = _optional_string(request, "ENROLLMENT_ID")
-                            enrollment_user_id = _optional_string(
+                            enrollment_scope_id = _optional_string(
                                 request,
-                                "ENROLLMENT_USER_ID",
+                                "ENROLLMENT_SCOPE_ID",
                             )
                     if wav is None:
                         responses[i] = _error_response("WAV is required for infer")
@@ -296,7 +295,7 @@ class TritonPythonModel:
                     sample_rates.append(_optional_int(request, "SAMPLE_RATE", 16000))
                     top_ks.append(_optional_int(request, "TOP_K"))
                     hotword_pool_ids.append(hotword_pool_id)
-                    enrollment_user_ids.append(enrollment_user_id)
+                    enrollment_scope_ids.append(enrollment_scope_id)
                     enrollment_ids.append(enrollment_id)
                     enable_hotword_recalls.append(
                         _optional_bool(request, "ENABLE_HOTWORD_RECALL", True)
@@ -315,11 +314,11 @@ class TritonPythonModel:
                     infer_indices.append(i)
                 elif action == "upsert_enrollment":
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                         enrollment_id = _optional_string(request, "ENROLLMENT_ID")
-                        enrollment_user_id = _optional_string(
+                        enrollment_scope_id = _optional_string(
                             request,
-                            "ENROLLMENT_USER_ID",
+                            "ENROLLMENT_SCOPE_ID",
                         )
                     if not enrollment_id:
                         responses[i] = _error_response(
@@ -335,16 +334,16 @@ class TritonPythonModel:
                         wav,
                         sample_rate=_optional_int(request, "SAMPLE_RATE", 16000),
                         enrollment_id=enrollment_id,
-                        user_id=enrollment_user_id or hotword_pool_id,
+                        enrollment_scope_id=enrollment_scope_id or hotword_pool_id,
                     )
                     responses[i] = _management_response(summary, requested_outputs)
                 elif action == "get_enrollment":
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                         enrollment_id = _optional_string(request, "ENROLLMENT_ID")
-                        enrollment_user_id = _optional_string(
+                        enrollment_scope_id = _optional_string(
                             request,
-                            "ENROLLMENT_USER_ID",
+                            "ENROLLMENT_SCOPE_ID",
                         )
                     if not enrollment_id:
                         responses[i] = _error_response(
@@ -353,16 +352,16 @@ class TritonPythonModel:
                         continue
                     summary = self.retriever.get_enrollment(
                         enrollment_id=enrollment_id,
-                        user_id=enrollment_user_id or hotword_pool_id,
+                        enrollment_scope_id=enrollment_scope_id or hotword_pool_id,
                     )
                     responses[i] = _management_response(summary, requested_outputs)
                 elif action == "delete_enrollment":
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                         enrollment_id = _optional_string(request, "ENROLLMENT_ID")
-                        enrollment_user_id = _optional_string(
+                        enrollment_scope_id = _optional_string(
                             request,
-                            "ENROLLMENT_USER_ID",
+                            "ENROLLMENT_SCOPE_ID",
                         )
                     if not enrollment_id:
                         responses[i] = _error_response(
@@ -371,12 +370,12 @@ class TritonPythonModel:
                         continue
                     summary = self.retriever.delete_enrollment(
                         enrollment_id=enrollment_id,
-                        user_id=enrollment_user_id or hotword_pool_id,
+                        enrollment_scope_id=enrollment_scope_id or hotword_pool_id,
                     )
                     responses[i] = _management_response(summary, requested_outputs)
                 elif action == "list":
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                     summary = self.retriever.list_hotwords(
                         user_id=hotword_pool_id,
                         query=_control_string(control, "query") if control else None,
@@ -386,7 +385,7 @@ class TritonPythonModel:
                     responses[i] = _management_response(summary, requested_outputs)
                 elif action == "add":
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                     summary = self.retriever.add_hotwords(
                         _parse_hotwords(request, control),
                         user_id=hotword_pool_id,
@@ -394,7 +393,7 @@ class TritonPythonModel:
                     responses[i] = _management_response(summary, requested_outputs)
                 elif action in {"delete", "remove"}:
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                     summary = self.retriever.delete_hotwords(
                         _parse_hotwords(request, control),
                         user_id=hotword_pool_id,
@@ -402,7 +401,7 @@ class TritonPythonModel:
                     responses[i] = _management_response(summary, requested_outputs)
                 elif action == "reload":
                     if not control:
-                        hotword_pool_id = _optional_string(request, "USER_ID")
+                        hotword_pool_id = _optional_string(request, "HOTWORD_POOL_ID")
                     summary = self.retriever.reload_hotwords(user_id=hotword_pool_id)
                     responses[i] = _management_response(summary, requested_outputs)
                 else:
@@ -419,7 +418,7 @@ class TritonPythonModel:
                     user_ids=hotword_pool_ids,
                     enable_hotword_recalls=enable_hotword_recalls,
                     enrollment_ids=enrollment_ids,
-                    enrollment_user_ids=enrollment_user_ids,
+                    enrollment_scope_ids=enrollment_scope_ids,
                 )
                 for offset, (request_index, result) in enumerate(
                     zip(infer_indices, results)

@@ -136,8 +136,8 @@ python scripts/triton_hotword_client.py --url localhost:10001 status
 python scripts/triton_hotword_client.py --url localhost:10001 list --limit 20
 python scripts/triton_hotword_client.py --url localhost:10001 infer --wav audio.wav --top-k 50
 
-# --user 是兼容参数名，语义是热词池 ID，不是业务用户身份。
-python scripts/triton_hotword_client.py --url localhost:10001 --user tenant-a infer --wav audio.wav
+# 热词池只使用 hotword_pool_id，不再接受 USER_ID/user_id 兼容字段。
+python scripts/triton_hotword_client.py --url localhost:10001 --hotword-pool-id tenant-a infer --wav audio.wav
 ```
 
 验证 vLLM encoder bypass 路径时，vLLM 需要以 `--enable-mm-embeds` 启动：
@@ -152,7 +152,7 @@ python examples/vllm_encoder_bypass.py \
 常用参数语义：
 
 - `--url`：Triton HTTP 地址，本机服务默认 `localhost:10001`。
-- `--user`：兼容参数名，实际语义是热词池 ID（推荐文档中称 `hotword_pool_id`），默认 `default`；不同热词池互相隔离。
+- `--hotword-pool-id`：热词池 ID，默认 `default`；不同热词池互相隔离。
 - `status`：显示当前服务 live/ready 状态、模型 ready 状态、热词总量、样例热词和关键配置；`hotword_status.sh` 默认输出人类可读文本，加 `-j` 输出 JSON。
 - `list --limit N`：最多显示 N 条已有热词，只控制查询结果分页大小，不影响热词库容量。
 - `list --query TEXT`：按子串过滤已有热词，用于确认某个热词是否已入库。

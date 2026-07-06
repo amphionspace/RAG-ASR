@@ -39,6 +39,26 @@ def _hotword_values(payload: dict[str, object]) -> list[object]:
     raise HTTPException(status_code=400, detail="hotwords must be a string or list")
 
 
+def _reject_legacy_enrollment_scope_fields(**values: object) -> None:
+    legacy = sorted(name for name, value in values.items() if value is not None)
+    if legacy:
+        joined = ", ".join(legacy)
+        raise HTTPException(
+            status_code=400,
+            detail=f"use enrollment_scope_id; unsupported field(s): {joined}",
+        )
+
+
+def _reject_legacy_hotword_pool_fields(**values: object) -> None:
+    legacy = sorted(name for name, value in values.items() if value is not None)
+    if legacy:
+        joined = ", ".join(legacy)
+        raise HTTPException(
+            status_code=400,
+            detail=f"use hotword_pool_id; unsupported field(s): {joined}",
+        )
+
+
 async def _read_float32_upload(file: UploadFile) -> np.ndarray:
     data = await file.read()
     if len(data) % np.dtype(np.float32).itemsize != 0:
@@ -61,10 +81,12 @@ async def health():
 @app.post("/retrieve")
 async def retrieve(
     file: UploadFile = File(...),
-    user_id: str = Form("default"),
+    hotword_pool_id: str = Form("default"),
+    user_id: Optional[str] = Form(None),
     top_k: Optional[int] = Form(None),
     sample_rate: int = Form(16000),
 ):
+    _reject_legacy_hotword_pool_fields(user_id=user_id)
     import soundfile as sf
 
     data = await file.read()
@@ -77,10 +99,10 @@ async def retrieve(
         wav,
         sample_rate=sample_rate,
         top_k=top_k,
-        user_id=user_id,
+        user_id=hotword_pool_id,
     )
     return JSONResponse({
-        "user_id": user_id,
+        "hotword_pool_id": hotword_pool_id,
         "word_list": result.word_list,
         "projector_len": result.projector_len,
         "projector_out": result.projector_out.tolist(),
@@ -96,9 +118,10 @@ async def list_hotword_pool(
     limit: Optional[int] = Query(None),
     offset: int = Query(0),
 ):
+    _reject_legacy_hotword_pool_fields(user_id=user_id)
     return JSONResponse(
         _require_retriever().list_hotwords(
-            user_id=user_id or hotword_pool_id,
+            user_id=hotword_pool_id,
             query=query,
             limit=limit,
             offset=offset,
@@ -108,29 +131,38 @@ async def list_hotword_pool(
 
 @app.post("/hotword-pool")
 async def add_hotword_pool(payload: dict[str, object] = Body(...)):
+    _reject_legacy_hotword_pool_fields(
+        user_id=payload.get("user_id") if "user_id" in payload else None,
+    )
     return JSONResponse(
         _require_retriever().add_hotwords(
             _hotword_values(payload),
-            user_id=str(payload.get("user_id") or payload.get("hotword_pool_id") or "default"),
+            user_id=str(payload.get("hotword_pool_id") or "default"),
         )
     )
 
 
 @app.delete("/hotword-pool")
 async def delete_hotword_pool(payload: dict[str, object] = Body(...)):
+    _reject_legacy_hotword_pool_fields(
+        user_id=payload.get("user_id") if "user_id" in payload else None,
+    )
     return JSONResponse(
         _require_retriever().delete_hotwords(
             _hotword_values(payload),
-            user_id=str(payload.get("user_id") or payload.get("hotword_pool_id") or "default"),
+            user_id=str(payload.get("hotword_pool_id") or "default"),
         )
     )
 
 
 @app.post("/hotword-pool/reload")
 async def reload_hotword_pool(payload: dict[str, object] = Body(default_factory=dict)):
+    _reject_legacy_hotword_pool_fields(
+        user_id=payload.get("user_id") if "user_id" in payload else None,
+    )
     return JSONResponse(
         _require_retriever().reload_hotwords(
-            user_id=str(payload.get("user_id") or payload.get("hotword_pool_id") or "default"),
+            user_id=str(payload.get("hotword_pool_id") or "default"),
         )
     )
 
@@ -139,17 +171,22 @@ async def reload_hotword_pool(payload: dict[str, object] = Body(default_factory=
 async def upsert_enrollment(
     enrollment_id: str,
     file: UploadFile = File(...),
-    enrollment_user_id: str = Form("default"),
+    enrollment_scope_id: str = Form("default"),
+    enrollment_user_id: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None),
     sample_rate: int = Form(16000),
 ):
+    _reject_legacy_enrollment_scope_fields(
+        enrollment_user_id=enrollment_user_id,
+        user_id=user_id,
+    )
     wav = await _read_float32_upload(file)
     return JSONResponse(
         _require_retriever().upsert_enrollment(
             wav,
             sample_rate=sample_rate,
             enrollment_id=enrollment_id,
-            user_id=user_id or enrollment_user_id,
+            enrollment_scope_id=enrollment_scope_id,
         )
     )
 
@@ -157,13 +194,18 @@ async def upsert_enrollment(
 @app.get("/enrollments/{enrollment_id}")
 async def get_enrollment(
     enrollment_id: str,
-    enrollment_user_id: str = Query("default"),
+    enrollment_scope_id: str = Query("default"),
+    enrollment_user_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
 ):
+    _reject_legacy_enrollment_scope_fields(
+        enrollment_user_id=enrollment_user_id,
+        user_id=user_id,
+    )
     return JSONResponse(
         _require_retriever().get_enrollment(
             enrollment_id=enrollment_id,
-            user_id=user_id or enrollment_user_id,
+            enrollment_scope_id=enrollment_scope_id,
         )
     )
 
@@ -171,13 +213,18 @@ async def get_enrollment(
 @app.delete("/enrollments/{enrollment_id}")
 async def delete_enrollment(
     enrollment_id: str,
-    enrollment_user_id: str = Query("default"),
+    enrollment_scope_id: str = Query("default"),
+    enrollment_user_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
 ):
+    _reject_legacy_enrollment_scope_fields(
+        enrollment_user_id=enrollment_user_id,
+        user_id=user_id,
+    )
     return JSONResponse(
         _require_retriever().delete_enrollment(
             enrollment_id=enrollment_id,
-            user_id=user_id or enrollment_user_id,
+            enrollment_scope_id=enrollment_scope_id,
         )
     )
 
