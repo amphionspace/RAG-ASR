@@ -156,7 +156,7 @@ class RAGASRRetriever:
             user = getattr(self, "default_user", self.cfg.default_user)
         if not _USER_ID_RE.fullmatch(user) or user in {".", ".."}:
             raise ValueError(
-                "USER_ID must contain only letters, digits, dot, underscore, or hyphen"
+                "HOTWORD_POOL_ID must contain only letters, digits, dot, underscore, or hyphen"
             )
         return user
 
@@ -228,14 +228,14 @@ class RAGASRRetriever:
             existing = meta.get(key)
             if existing is not None and int(existing) != int(current[key]):
                 raise ValueError(
-                    f"enrollment embedding incompatible: user_id={user_id} "
+                    f"enrollment embedding incompatible: enrollment_scope_id={user_id} "
                     f"enrollment_id={enrollment_id} {key}={existing} "
                     f"current_{key}={current[key]}"
                 )
         projector_dim = int(current["projector_dim"])
         if tensor.ndim != 2 or int(tensor.shape[1]) != projector_dim:
             raise ValueError(
-                f"enrollment embedding incompatible: user_id={user_id} "
+                f"enrollment embedding incompatible: enrollment_scope_id={user_id} "
                 f"enrollment_id={enrollment_id} shape={list(tensor.shape)} "
                 f"current_projector_dim={projector_dim}"
             )
@@ -522,7 +522,7 @@ class RAGASRRetriever:
             "action": "list",
             "status": "ok",
             "message": f"returned {len(page)} hotwords",
-            "user_id": pool.user_id,
+            "hotword_pool_id": pool.user_id,
             "hotwords": page,
             "total_count": total_count,
             "matched_count": len(matched),
@@ -560,7 +560,7 @@ class RAGASRRetriever:
             "action": "add",
             "status": "ok",
             "message": f"added {added} hotwords",
-            "user_id": pool.user_id,
+            "hotword_pool_id": pool.user_id,
             "hotwords": batch.words,
             "total_count": total_count,
             "added": added,
@@ -609,7 +609,7 @@ class RAGASRRetriever:
             "action": "delete",
             "status": "ok",
             "message": f"deleted {deleted} hotwords",
-            "user_id": pool.user_id,
+            "hotword_pool_id": pool.user_id,
             "hotwords": batch.words,
             "total_count": total_count,
             "deleted": deleted,
@@ -632,7 +632,7 @@ class RAGASRRetriever:
             "action": "reload",
             "status": "ok",
             "message": f"reloaded hotword pool: {old_count} -> {total_count}",
-            "user_id": pool.user_id,
+            "hotword_pool_id": pool.user_id,
             "hotwords": [],
             "total_count": total_count,
             "reloaded": total_count,
@@ -702,10 +702,10 @@ class RAGASRRetriever:
         *,
         sample_rate: int = 16000,
         enrollment_id: Optional[str],
-        user_id: Optional[str] = None,
+        enrollment_scope_id: Optional[str] = None,
     ) -> dict[str, object]:
         """Persist target-speaker projector frames; raw audio is never stored."""
-        resolved_user = self._resolve_user(user_id)
+        resolved_user = self._resolve_user(enrollment_scope_id)
         resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
         audio = np.asarray(wav, dtype=np.float32).reshape(-1)
         duration_sec = float(audio.shape[0]) / float(sample_rate or 16000)
@@ -747,7 +747,7 @@ class RAGASRRetriever:
                         "action": "upsert_enrollment",
                         "status": "ok",
                         "message": "enrollment embedding unchanged",
-                        "user_id": resolved_user,
+                        "enrollment_scope_id": resolved_user,
                         "enrollment_id": resolved_enrollment,
                         "audio_hash": audio_hash,
                         "duration_sec": previous_meta.get("duration_sec", duration_sec),
@@ -764,7 +764,7 @@ class RAGASRRetriever:
         now = self._now()
         overwritten = tensor_path.exists() or meta_path.exists()
         meta: dict[str, object] = {
-            "user_id": resolved_user,
+            "enrollment_scope_id": resolved_user,
             "enrollment_id": resolved_enrollment,
             "audio_hash": audio_hash,
             "sample_rate": int(sample_rate),
@@ -792,7 +792,7 @@ class RAGASRRetriever:
             "action": "upsert_enrollment",
             "status": "ok",
             "message": "enrollment embedding stored",
-            "user_id": resolved_user,
+            "enrollment_scope_id": resolved_user,
             "enrollment_id": resolved_enrollment,
             "audio_hash": meta["audio_hash"],
             "duration_sec": duration_sec,
@@ -833,7 +833,7 @@ class RAGASRRetriever:
             tensor = torch.as_tensor(tensor, dtype=torch.float32)
         tensor = tensor.to(dtype=torch.float32)
         meta: dict[str, object] = {
-            "user_id": user_id,
+            "enrollment_scope_id": user_id,
             "enrollment_id": enrollment_id,
             "shape": list(tensor.shape),
             "dtype": "float32",
@@ -873,9 +873,9 @@ class RAGASRRetriever:
         self,
         *,
         enrollment_id: Optional[str],
-        user_id: Optional[str] = None,
+        enrollment_scope_id: Optional[str] = None,
     ) -> dict[str, object]:
-        resolved_user = self._resolve_user(user_id)
+        resolved_user = self._resolve_user(enrollment_scope_id)
         resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
         try:
             with self._enrollment_lock:
@@ -888,7 +888,7 @@ class RAGASRRetriever:
                 "action": "get_enrollment",
                 "status": "incompatible",
                 "message": str(exc),
-                "user_id": resolved_user,
+                "enrollment_scope_id": resolved_user,
                 "enrollment_id": resolved_enrollment,
             }
         if entry is None:
@@ -896,14 +896,14 @@ class RAGASRRetriever:
                 "action": "get_enrollment",
                 "status": "not_found",
                 "message": "enrollment embedding not found",
-                "user_id": resolved_user,
+                "enrollment_scope_id": resolved_user,
                 "enrollment_id": resolved_enrollment,
             }
         return {
             "action": "get_enrollment",
             "status": "ok",
             "message": "enrollment embedding found",
-            "user_id": resolved_user,
+            "enrollment_scope_id": resolved_user,
             "enrollment_id": resolved_enrollment,
             "shape": list(entry.tensor.shape),
             "cache_hit": hit,
@@ -932,9 +932,9 @@ class RAGASRRetriever:
         self,
         *,
         enrollment_id: Optional[str],
-        user_id: Optional[str] = None,
+        enrollment_scope_id: Optional[str] = None,
     ) -> dict[str, object]:
-        resolved_user = self._resolve_user(user_id)
+        resolved_user = self._resolve_user(enrollment_scope_id)
         resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
         tensor_path, meta_path = self._enrollment_paths(
             resolved_user,
@@ -953,7 +953,7 @@ class RAGASRRetriever:
             "action": "delete_enrollment",
             "status": "ok",
             "message": "enrollment embedding deleted" if deleted else "enrollment embedding absent",
-            "user_id": resolved_user,
+            "enrollment_scope_id": resolved_user,
             "enrollment_id": resolved_enrollment,
             "deleted": deleted,
         }
@@ -991,7 +991,7 @@ class RAGASRRetriever:
         elif len(values) == n_items:
             out = [self._resolve_user(value) for value in values]
         else:
-            raise ValueError(f"expected 1 or {n_items} USER_ID values, got {len(values)}")
+            raise ValueError(f"expected 1 or {n_items} HOTWORD_POOL_ID values, got {len(values)}")
         return out
 
     def _normalise_per_item_enrollment_ids(
@@ -1038,7 +1038,7 @@ class RAGASRRetriever:
         *,
         enable_hotword_recalls: Optional[list[bool]] = None,
         enrollment_ids: Optional[list[Optional[str]]] = None,
-        enrollment_user_ids: Optional[list[str]] = None,
+        enrollment_scope_ids: Optional[list[str]] = None,
         packed_audio: bool = False,
     ) -> list[InferResult]:
         features = features.to(self._device)
@@ -1047,8 +1047,8 @@ class RAGASRRetriever:
             enable_hotword_recalls = [True] * len(top_k_values)
         if enrollment_ids is None:
             enrollment_ids = [None] * len(top_k_values)
-        if enrollment_user_ids is None:
-            enrollment_user_ids = user_ids
+        if enrollment_scope_ids is None:
+            enrollment_scope_ids = user_ids
 
         if packed_audio and hasattr(self.audio_tower, "forward_with_projector_packed"):
             pooled, proj, proj_lens = self.audio_tower.forward_with_projector_packed(
@@ -1082,12 +1082,12 @@ class RAGASRRetriever:
             if enrollment_id:
                 with self._enrollment_lock:
                     entry, enrollment_cache_hit = self._load_enrollment_locked(
-                        user_id=enrollment_user_ids[i],
+                        user_id=enrollment_scope_ids[i],
                         enrollment_id=enrollment_id,
                     )
                 if entry is None:
                     raise ValueError(
-                        f"enrollment embedding not found: user_id={enrollment_user_ids[i]} "
+                        f"enrollment embedding not found: enrollment_scope_id={enrollment_scope_ids[i]} "
                         f"enrollment_id={enrollment_id}"
                     )
                 enrollment_projector_out = (
@@ -1116,7 +1116,7 @@ class RAGASRRetriever:
         user_id: Optional[str] = None,
         enable_hotword_recall: bool = True,
         enrollment_id: Optional[str] = None,
-        enrollment_user_id: Optional[str] = None,
+        enrollment_scope_id: Optional[str] = None,
     ) -> InferResult:
         """Run retrieval on a single waveform."""
         return self.infer_many(
@@ -1126,7 +1126,7 @@ class RAGASRRetriever:
             user_ids=[user_id],
             enable_hotword_recalls=[enable_hotword_recall],
             enrollment_ids=[enrollment_id],
-            enrollment_user_ids=[enrollment_user_id],
+            enrollment_scope_ids=[enrollment_scope_id],
         )[0]
 
     @torch.no_grad()
@@ -1139,7 +1139,7 @@ class RAGASRRetriever:
         user_ids: Optional[list[Optional[str]]] = None,
         enable_hotword_recalls: Optional[list[Optional[bool]]] = None,
         enrollment_ids: Optional[list[Optional[str]]] = None,
-        enrollment_user_ids: Optional[list[Optional[str]]] = None,
+        enrollment_scope_ids: Optional[list[Optional[str]]] = None,
     ) -> list[InferResult]:
         """Run retrieval for multiple waveforms in one model call.
 
@@ -1177,11 +1177,11 @@ class RAGASRRetriever:
             enrollment_ids,
             n_items=len(wavs),
         )
-        enrollment_user_id_values = (
+        enrollment_scope_id_values = (
             list(user_id_values)
-            if enrollment_user_ids is None
+            if enrollment_scope_ids is None
             else self._normalise_per_item_user_ids(
-                enrollment_user_ids,
+                enrollment_scope_ids,
                 n_items=len(wavs),
             )
         )
@@ -1194,7 +1194,7 @@ class RAGASRRetriever:
             user_id_values,
             enable_hotword_recalls=hotword_recall_values,
             enrollment_ids=enrollment_id_values,
-            enrollment_user_ids=enrollment_user_id_values,
+            enrollment_scope_ids=enrollment_scope_id_values,
         )
 
     @torch.no_grad()
@@ -1208,7 +1208,7 @@ class RAGASRRetriever:
         user_ids: Optional[list[Optional[str]]] = None,
         enable_hotword_recalls: Optional[list[Optional[bool]]] = None,
         enrollment_ids: Optional[list[Optional[str]]] = None,
-        enrollment_user_ids: Optional[list[Optional[str]]] = None,
+        enrollment_scope_ids: Optional[list[Optional[str]]] = None,
         packed_audio: bool = False,
     ) -> list[InferResult]:
         """Run retrieval for an explicit padded waveform batch.
@@ -1248,11 +1248,11 @@ class RAGASRRetriever:
             enrollment_ids,
             n_items=n_items,
         )
-        enrollment_user_id_values = (
+        enrollment_scope_id_values = (
             list(user_id_values)
-            if enrollment_user_ids is None
+            if enrollment_scope_ids is None
             else self._normalise_per_item_user_ids(
-                enrollment_user_ids,
+                enrollment_scope_ids,
                 n_items=n_items,
             )
         )
@@ -1268,7 +1268,7 @@ class RAGASRRetriever:
             user_id_values,
             enable_hotword_recalls=hotword_recall_values,
             enrollment_ids=enrollment_id_values,
-            enrollment_user_ids=enrollment_user_id_values,
+            enrollment_scope_ids=enrollment_scope_id_values,
             packed_audio=packed_audio,
         )
 

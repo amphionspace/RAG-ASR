@@ -22,7 +22,7 @@ input [
     optional: true
   },
   {
-    name: "USER_ID"
+    name: "HOTWORD_POOL_ID"
     data_type: TYPE_STRING
     dims: [ 1 ]
     optional: true
@@ -76,7 +76,7 @@ input [
     optional: true
   },
   {
-    name: "ENROLLMENT_USER_ID"
+    name: "ENROLLMENT_SCOPE_ID"
     data_type: TYPE_STRING
     dims: [ 1 ]
     optional: true
