@@ -58,6 +58,7 @@ class ServeConfig:
     enrollment_store_dir: str = "var/enrollments"
     enrollment_cache_max_entries: int = 256
     enrollment_cache_device: str = "auto"
+    enrollment_metadata_touch_interval_sec: float = 300.0
 
 
 @dataclass
@@ -185,6 +186,82 @@ class RAGASRRetriever:
         digest.update(str(int(sample_rate)).encode("ascii"))
         digest.update(audio.tobytes())
         return digest.hexdigest()
+
+    def _enrollment_model_meta(self) -> dict[str, object]:
+        return {
+            "base_model_path": str(self.cfg.base_model_path),
+            "adapter_ckpt": str(self.adapter_ckpt),
+            "projector_dim": int(getattr(self, "projector_dim", self.cfg.embed_dim)),
+            "embed_dim": int(self.cfg.embed_dim),
+        }
+
+    def _warn_on_enrollment_model_drift(
+        self,
+        *,
+        user_id: str,
+        enrollment_id: str,
+        meta: dict[str, object],
+    ) -> None:
+        current = self._enrollment_model_meta()
+        for key in ("base_model_path", "adapter_ckpt"):
+            existing = meta.get(key)
+            if existing and str(existing) != str(current[key]):
+                logger.warning(
+                    "enrollment %s/%s %s differs from current service: stored=%s current=%s",
+                    user_id,
+                    enrollment_id,
+                    key,
+                    existing,
+                    current[key],
+                )
+
+    def _validate_enrollment_compatible(
+        self,
+        *,
+        user_id: str,
+        enrollment_id: str,
+        tensor: torch.Tensor,
+        meta: dict[str, object],
+    ) -> None:
+        current = self._enrollment_model_meta()
+        for key in ("projector_dim", "embed_dim"):
+            existing = meta.get(key)
+            if existing is not None and int(existing) != int(current[key]):
+                raise ValueError(
+                    f"enrollment embedding incompatible: user_id={user_id} "
+                    f"enrollment_id={enrollment_id} {key}={existing} "
+                    f"current_{key}={current[key]}"
+                )
+        projector_dim = int(current["projector_dim"])
+        if tensor.ndim != 2 or int(tensor.shape[1]) != projector_dim:
+            raise ValueError(
+                f"enrollment embedding incompatible: user_id={user_id} "
+                f"enrollment_id={enrollment_id} shape={list(tensor.shape)} "
+                f"current_projector_dim={projector_dim}"
+            )
+        self._warn_on_enrollment_model_drift(
+            user_id=user_id,
+            enrollment_id=enrollment_id,
+            meta=meta,
+        )
+
+    def _should_touch_enrollment_meta(
+        self,
+        *,
+        meta_path: Path,
+        previous_last_used_at: object,
+        now: float,
+    ) -> bool:
+        if not meta_path.exists():
+            return True
+        interval = max(float(self.cfg.enrollment_metadata_touch_interval_sec), 0.0)
+        if interval == 0.0:
+            return True
+        try:
+            previous = float(previous_last_used_at)
+        except (TypeError, ValueError):
+            return True
+        return now - previous >= interval
 
     def _cache_device(self) -> torch.device:
         configured = (self.cfg.enrollment_cache_device or "auto").strip().lower()
@@ -632,17 +709,64 @@ class RAGASRRetriever:
         resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
         audio = np.asarray(wav, dtype=np.float32).reshape(-1)
         duration_sec = float(audio.shape[0]) / float(sample_rate or 16000)
-        frames = self._project_audio(audio, sample_rate)
-        tensor = torch.from_numpy(frames.astype(np.float32, copy=False))
         tensor_path, meta_path = self._enrollment_paths(
             resolved_user,
             resolved_enrollment,
         )
         now = self._now()
+        audio_hash = self._audio_hash(audio, sample_rate)
+        previous_meta: dict[str, object] = {}
+        if meta_path.exists():
+            try:
+                loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    previous_meta = loaded
+            except Exception:
+                logger.warning("failed to read existing enrollment metadata: %s", meta_path)
+        if (
+            previous_meta.get("audio_hash") == audio_hash
+            and int(previous_meta.get("sample_rate", 0)) == int(sample_rate)
+            and tensor_path.exists()
+        ):
+            try:
+                with self._enrollment_lock:
+                    entry, hit = self._load_enrollment_locked(
+                        user_id=resolved_user,
+                        enrollment_id=resolved_enrollment,
+                    )
+            except ValueError as exc:
+                logger.warning(
+                    "existing enrollment %s/%s is incompatible; recomputing: %s",
+                    resolved_user,
+                    resolved_enrollment,
+                    exc,
+                )
+            else:
+                if entry is not None:
+                    return {
+                        "action": "upsert_enrollment",
+                        "status": "ok",
+                        "message": "enrollment embedding unchanged",
+                        "user_id": resolved_user,
+                        "enrollment_id": resolved_enrollment,
+                        "audio_hash": audio_hash,
+                        "duration_sec": previous_meta.get("duration_sec", duration_sec),
+                        "shape": list(entry.tensor.shape),
+                        "tensor_path": str(tensor_path),
+                        "cache_device": entry.cache_device,
+                        "cache_hit": hit,
+                        "skipped": True,
+                        "overwritten": False,
+                    }
+
+        frames = self._project_audio(audio, sample_rate)
+        tensor = torch.from_numpy(frames.astype(np.float32, copy=False))
+        now = self._now()
+        overwritten = tensor_path.exists() or meta_path.exists()
         meta: dict[str, object] = {
             "user_id": resolved_user,
             "enrollment_id": resolved_enrollment,
-            "audio_hash": self._audio_hash(audio, sample_rate),
+            "audio_hash": audio_hash,
             "sample_rate": int(sample_rate),
             "duration_sec": duration_sec,
             "shape": list(tensor.shape),
@@ -651,14 +775,10 @@ class RAGASRRetriever:
             "created_at": now,
             "updated_at": now,
             "last_used_at": now,
+            **self._enrollment_model_meta(),
         }
-        if meta_path.exists():
-            try:
-                previous = json.loads(meta_path.read_text(encoding="utf-8"))
-                if isinstance(previous, dict) and previous.get("created_at"):
-                    meta["created_at"] = previous["created_at"]
-            except Exception:
-                logger.warning("failed to read existing enrollment metadata: %s", meta_path)
+        if previous_meta.get("created_at"):
+            meta["created_at"] = previous_meta["created_at"]
         self._atomic_torch_save(tensor_path, tensor)
         self._atomic_json_write(meta_path, meta)
         with self._enrollment_lock:
@@ -679,6 +799,8 @@ class RAGASRRetriever:
             "shape": list(tensor.shape),
             "tensor_path": str(tensor_path),
             "cache_device": entry.cache_device,
+            "skipped": False,
+            "overwritten": overwritten,
         }
 
     def _load_enrollment_locked(
@@ -691,10 +813,16 @@ class RAGASRRetriever:
         cached = self._enrollment_cache.get(key)
         now = self._now()
         if cached is not None:
+            previous_last_used_at = cached.meta.get("last_used_at")
             cached.meta["last_used_at"] = now
             self._enrollment_cache.move_to_end(key)
             _, meta_path = self._enrollment_paths(user_id, enrollment_id)
-            self._atomic_json_write(meta_path, cached.meta)
+            if self._should_touch_enrollment_meta(
+                meta_path=meta_path,
+                previous_last_used_at=previous_last_used_at,
+                now=now,
+            ):
+                self._atomic_json_write(meta_path, cached.meta)
             return cached, True
 
         tensor_path, meta_path = self._enrollment_paths(user_id, enrollment_id)
@@ -719,8 +847,20 @@ class RAGASRRetriever:
                     meta.update(loaded)
             except Exception:
                 logger.warning("failed to read enrollment metadata: %s", meta_path)
+        self._validate_enrollment_compatible(
+            user_id=user_id,
+            enrollment_id=enrollment_id,
+            tensor=tensor,
+            meta=meta,
+        )
+        previous_last_used_at = meta.get("last_used_at")
         meta["last_used_at"] = now
-        self._atomic_json_write(meta_path, meta)
+        if self._should_touch_enrollment_meta(
+            meta_path=meta_path,
+            previous_last_used_at=previous_last_used_at,
+            now=now,
+        ):
+            self._atomic_json_write(meta_path, meta)
         entry = self._cache_enrollment_locked(
             user_id=user_id,
             enrollment_id=enrollment_id,
@@ -737,11 +877,20 @@ class RAGASRRetriever:
     ) -> dict[str, object]:
         resolved_user = self._resolve_user(user_id)
         resolved_enrollment = self._resolve_enrollment_id(enrollment_id)
-        with self._enrollment_lock:
-            entry, hit = self._load_enrollment_locked(
-                user_id=resolved_user,
-                enrollment_id=resolved_enrollment,
-            )
+        try:
+            with self._enrollment_lock:
+                entry, hit = self._load_enrollment_locked(
+                    user_id=resolved_user,
+                    enrollment_id=resolved_enrollment,
+                )
+        except ValueError as exc:
+            return {
+                "action": "get_enrollment",
+                "status": "incompatible",
+                "message": str(exc),
+                "user_id": resolved_user,
+                "enrollment_id": resolved_enrollment,
+            }
         if entry is None:
             return {
                 "action": "get_enrollment",
@@ -771,6 +920,10 @@ class RAGASRRetriever:
                     "created_at",
                     "updated_at",
                     "last_used_at",
+                    "base_model_path",
+                    "adapter_ckpt",
+                    "projector_dim",
+                    "embed_dim",
                 }
             },
         }
@@ -1151,6 +1304,9 @@ class RAGASRRetriever:
                 ),
                 enrollment_cache_device=params.get(
                     "enrollment_cache_device", "auto"
+                ),
+                enrollment_metadata_touch_interval_sec=float(
+                    params.get("enrollment_metadata_touch_interval_sec", "300")
                 ),
             )
         )

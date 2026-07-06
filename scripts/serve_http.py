@@ -192,6 +192,8 @@ def main():
     p.add_argument("--hotword-pool-file", default=None)
     p.add_argument("--hotword-pool-dir", default=None)
     p.add_argument("--seed-pool-file", default=None)
+    p.add_argument("--enrollment-store-dir", default=None)
+    p.add_argument("--enrollment-metadata-touch-interval-sec", type=float, default=None)
     p.add_argument("--default-user", default=None)
     p.add_argument("--top-k", type=int, default=50)
     p.add_argument("--cache-dir", default=None)
@@ -210,6 +212,12 @@ def main():
             kwargs["hotword_pool_dir"] = args.hotword_pool_dir
         if args.seed_pool_file:
             kwargs["seed_pool_file"] = args.seed_pool_file
+        if args.enrollment_store_dir:
+            kwargs["enrollment_store_dir"] = args.enrollment_store_dir
+        if args.enrollment_metadata_touch_interval_sec is not None:
+            kwargs["enrollment_metadata_touch_interval_sec"] = (
+                args.enrollment_metadata_touch_interval_sec
+            )
         if args.default_user:
             kwargs["default_user"] = args.default_user
         if args.cache_dir:
@@ -226,6 +234,12 @@ def main():
             hotword_pool_file=args.hotword_pool_file,
             hotword_pool_dir=args.hotword_pool_dir or "var/hotwords",
             seed_pool_file=args.seed_pool_file,
+            enrollment_store_dir=args.enrollment_store_dir or "var/enrollments",
+            enrollment_metadata_touch_interval_sec=(
+                args.enrollment_metadata_touch_interval_sec
+                if args.enrollment_metadata_touch_interval_sec is not None
+                else 300.0
+            ),
             default_user=args.default_user or "default",
             default_top_k=args.top_k,
             cache_dir=args.cache_dir,
