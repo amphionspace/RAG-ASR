@@ -94,6 +94,9 @@ def main():
                    help="Shard index in [0, num_shards). Default 0.")
     p.add_argument("--num-shards", type=int, default=1,
                    help="Total shard count (= number of GPUs for data parallel).")
+    p.add_argument("--retrieval-mode", choices=["global", "local"], default="local",
+                   help="Retrieval scoring: global=pooled audio·text; "
+                        "local=max-over-frame GLCLAP (v2.0 adapter).")
     args = p.parse_args()
 
     if not (0 <= args.shard_id < args.num_shards):
@@ -140,6 +143,7 @@ def main():
         cache_dir=cache_dir,
         shard_id=args.shard_id,
         num_shards=args.num_shards,
+        retrieval_mode=args.retrieval_mode,
     )
 
     out = Path(args.output)

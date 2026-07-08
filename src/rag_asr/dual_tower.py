@@ -261,7 +261,8 @@ class AmphionAudioTower(nn.Module):
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> torch.Tensor:
+        return_frames: bool = False,
+    ):
         """AmphionASR batched forward: encoder → projector → adapter → pool."""
         with torch.no_grad():
             feats = features.to(dtype=self._encoder_dtype)
@@ -274,37 +275,49 @@ class AmphionAudioTower(nn.Module):
         proj_f = proj_out.float()
         B, T, proj_dim = proj_f.shape
         embs = self.adapter(proj_f.view(B * T, proj_dim)).view(B, T, self.embed_dim)
-        pooled = self.pool(embs, proj_lens)
-        return F.normalize(pooled, dim=-1)
+        pooled = F.normalize(self.pool(embs, proj_lens), dim=-1)
+        if return_frames:
+            frames = F.normalize(embs, dim=-1)
+            return pooled, frames, proj_lens
+        return pooled
 
     def _forward_qwen3(
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> torch.Tensor:
-        """Qwen3ASR per-utterance forward: audio_tower → adapter → pool.
-
-        Qwen3's audio_tower uses packed sequences internally, so we call it
-        one utterance at a time (matching how Qwen3ASRThinker calls it) and
-        stack the pooled results.
-        """
+        return_frames: bool = False,
+    ):
+        """Qwen3ASR per-utterance forward: audio_tower → adapter → pool."""
         pooled_list: list[torch.Tensor] = []
+        frame_list: list[torch.Tensor] = []
+        frame_len_list: list[int] = []
         for i in range(features.shape[0]):
             T_i = int(feature_lens[i].item())
-            # audio_tower expects (F, T) for a single utterance
             feat_i = features[i, :T_i, :].to(dtype=self._encoder_dtype).T.contiguous()
-            fl_i = feature_lens[i:i + 1]  # (1,)
+            fl_i = feature_lens[i:i + 1]
             with torch.no_grad():
                 out = self.audio_tower(feat_i, feature_lens=fl_i)
-            # last_hidden_state: (T'_i, proj_dim) packed frames for one utt
-            hidden = out.last_hidden_state.float()      # (T'_i, proj_dim)
-            embs_i = self.adapter(hidden)               # (T'_i, embed_dim)
+            hidden = out.last_hidden_state.float()
+            embs_i = self.adapter(hidden)
             lengths_i = torch.tensor(
                 [embs_i.shape[0]], dtype=torch.long, device=embs_i.device
             )
             pooled_i = self.pool(embs_i.unsqueeze(0), lengths_i).squeeze(0)
             pooled_list.append(F.normalize(pooled_i, dim=-1))
-        return torch.stack(pooled_list)                 # (B, embed_dim)
+            if return_frames:
+                frame_list.append(F.normalize(embs_i, dim=-1))
+                frame_len_list.append(embs_i.shape[0])
+        pooled = torch.stack(pooled_list)
+        if return_frames:
+            max_t = max(frame_len_list)
+            frames = pooled.new_zeros((len(frame_list), max_t, self.embed_dim))
+            for i, f in enumerate(frame_list):
+                frames[i, : f.shape[0]] = f
+            frame_lens = torch.tensor(
+                frame_len_list, dtype=torch.long, device=pooled.device
+            )
+            return pooled, frames, frame_lens
+        return pooled
 
     def _projector_dim_amphion(self) -> int:
         for m in reversed(list(self.projector.modules())):
@@ -323,7 +336,7 @@ class AmphionAudioTower(nn.Module):
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Encode audio and return retrieval embedding plus projector frames.
 
         Returns
@@ -331,6 +344,7 @@ class AmphionAudioTower(nn.Module):
         pooled : ``(B, embed_dim)`` L2-normalised retrieval embedding
         proj : ``(B, T', D_proj)`` float32 projector output (padded)
         proj_lens : ``(B,)`` valid projector frame counts
+        retrieval_frames : ``(B, T', embed_dim)`` per-frame L2-normalised adapter embs
         """
         if self._backend == "qwen3":
             return self._forward_with_projector_qwen3(features, feature_lens)
@@ -340,7 +354,7 @@ class AmphionAudioTower(nn.Module):
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         with torch.no_grad():
             feats = features.to(dtype=self._encoder_dtype)
             max_len = int(feature_lens.max().item())
@@ -352,16 +366,18 @@ class AmphionAudioTower(nn.Module):
         proj_f = proj_out.float()
         B, T, proj_dim = proj_f.shape
         embs = self.adapter(proj_f.view(B * T, proj_dim)).view(B, T, self.embed_dim)
-        pooled = self.pool(embs, proj_lens)
-        return F.normalize(pooled, dim=-1), proj_f, proj_lens
+        retrieval_frames = F.normalize(embs, dim=-1)
+        pooled = F.normalize(self.pool(embs, proj_lens), dim=-1)
+        return pooled, proj_f, proj_lens, retrieval_frames
 
     def _forward_with_projector_qwen3(
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         pooled_list: list[torch.Tensor] = []
         proj_list: list[torch.Tensor] = []
+        frame_list: list[torch.Tensor] = []
         lens_list: list[int] = []
         for i in range(features.shape[0]):
             T_i = int(feature_lens[i].item())
@@ -377,16 +393,21 @@ class AmphionAudioTower(nn.Module):
             pooled_i = self.pool(embs_i.unsqueeze(0), lengths_i).squeeze(0)
             pooled_list.append(F.normalize(pooled_i, dim=-1))
             proj_list.append(hidden)
+            frame_list.append(F.normalize(embs_i, dim=-1))
             lens_list.append(hidden.shape[0])
 
         max_t = max(lens_list)
         D = proj_list[0].shape[1]
         device = proj_list[0].device
         proj = torch.zeros(len(proj_list), max_t, D, dtype=torch.float32, device=device)
-        for i, h in enumerate(proj_list):
+        retrieval_frames = torch.zeros(
+            len(frame_list), max_t, self.embed_dim, dtype=torch.float32, device=device
+        )
+        for i, (h, f) in enumerate(zip(proj_list, frame_list)):
             proj[i, : lens_list[i], :] = h
+            retrieval_frames[i, : lens_list[i], :] = f
         proj_lens = torch.tensor(lens_list, dtype=torch.long, device=device)
-        return torch.stack(pooled_list), proj, proj_lens
+        return torch.stack(pooled_list), proj, proj_lens, retrieval_frames
 
     @staticmethod
     def _qwen3_projector_lens(feature_lens: torch.Tensor) -> torch.Tensor:
@@ -404,7 +425,7 @@ class AmphionAudioTower(nn.Module):
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Encode audio with a packed Qwen3 call when supported.
 
         The Amphion backend already supports a true batched path.  For Qwen3,
@@ -419,7 +440,7 @@ class AmphionAudioTower(nn.Module):
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         lens_list = [int(length.item()) for length in feature_lens]
         packed_frames = [
             features[i, : lens, :].to(dtype=self._encoder_dtype)
@@ -454,27 +475,33 @@ class AmphionAudioTower(nn.Module):
             proj[i, : hidden_i.shape[0], :] = hidden_i
             embs[i, : embs_i.shape[0], :] = embs_i
 
-        pooled = self.pool(embs, proj_lens)
-        return F.normalize(pooled, dim=-1), proj, proj_lens
+        retrieval_frames = F.normalize(embs, dim=-1)
+        pooled = F.normalize(self.pool(embs, proj_lens), dim=-1)
+        return pooled, proj, proj_lens, retrieval_frames
 
     def forward(
         self,
         features: torch.Tensor,
         feature_lens: torch.Tensor,
-    ) -> torch.Tensor:
+        return_frames: bool = False,
+    ):
         """
         Parameters
         ----------
         features : ``(B, T, F)`` float — mel-filterbank features
         feature_lens : ``(B,)`` long — valid frame counts
+        return_frames : bool
+            If ``True``, return ``(pooled, frames, frame_lens)`` for GLCLAP
+            max-over-time retrieval.
 
         Returns
         -------
-        ``(B, embed_dim)`` L2-normalised embedding
+        ``(B, embed_dim)`` when ``return_frames=False``, else
+        ``(pooled, frames, frame_lens)``.
         """
         if self._backend == "qwen3":
-            return self._forward_qwen3(features, feature_lens)
-        return self._forward_amphion(features, feature_lens)
+            return self._forward_qwen3(features, feature_lens, return_frames)
+        return self._forward_amphion(features, feature_lens, return_frames)
 
 
 # ---------------------------------------------------------------------------
@@ -750,6 +777,93 @@ def per_positive_infonce_loss(
     logits = logit_scale * torch.cat([pos_sims, neg_sims], dim=1)
     labels = torch.zeros(B, dtype=torch.long, device=audio_embs.device)
     return F.cross_entropy(logits, labels)
+
+
+# ---------------------------------------------------------------------------
+# GLCLAP local (max-over-time) retrieval + losses
+# ---------------------------------------------------------------------------
+
+def frame_text_sim(
+    frame_embs: torch.Tensor,
+    frame_lens: torch.Tensor,
+    text_embs: torch.Tensor,
+    chunk: int = 1024,
+) -> torch.Tensor:
+    """Max-over-time similarity between audio frames and text embeddings."""
+    B, T, _ = frame_embs.shape
+    M = text_embs.shape[0]
+    pad_mask = (
+        torch.arange(T, device=frame_embs.device).unsqueeze(0)
+        >= frame_lens.unsqueeze(1)
+    )
+    out = frame_embs.new_empty((B, M))
+    for s in range(0, M, chunk):
+        e = min(s + chunk, M)
+        sim = torch.matmul(frame_embs, text_embs[s:e].t())
+        sim = sim.masked_fill(pad_mask.unsqueeze(-1), float("-inf"))
+        out[:, s:e] = sim.max(dim=1).values
+    return out
+
+
+def per_positive_infonce_loss_local(
+    frame_embs: torch.Tensor,
+    frame_lens: torch.Tensor,
+    audio_idx: torch.Tensor,
+    pos_embs: torch.Tensor,
+    neg_embs: torch.Tensor,
+    logit_scale: torch.Tensor,
+) -> torch.Tensor:
+    """Local (max-over-time) audio→text InfoNCE with global negatives."""
+    P = pos_embs.shape[0]
+    if P == 0:
+        return frame_embs.sum() * 0.0
+    sim_pos = frame_text_sim(frame_embs, frame_lens, pos_embs)
+    sim_neg = frame_text_sim(frame_embs, frame_lens, neg_embs)
+    ar = torch.arange(P, device=frame_embs.device)
+    pos_scores = sim_pos[audio_idx, ar].unsqueeze(1)
+    neg_scores = sim_neg[audio_idx]
+    logits = logit_scale * torch.cat([pos_scores, neg_scores], dim=1)
+    labels = torch.zeros(P, dtype=torch.long, device=frame_embs.device)
+    return F.cross_entropy(logits, labels)
+
+
+def text2audio_infonce_loss_local(
+    frame_embs: torch.Tensor,
+    frame_lens: torch.Tensor,
+    pos_embs: torch.Tensor,
+    labels: torch.Tensor,
+    logit_scale: torch.Tensor,
+) -> torch.Tensor:
+    """Local (max-over-time) text→audio InfoNCE with in-batch negatives."""
+    if pos_embs.shape[0] == 0:
+        return frame_embs.sum() * 0.0
+    sim = frame_text_sim(frame_embs, frame_lens, pos_embs)
+    logits = logit_scale * sim.t()
+    return F.cross_entropy(logits, labels)
+
+
+def score_retrieval(
+    *,
+    retrieval_mode: str,
+    pooled: torch.Tensor,
+    retrieval_frames: torch.Tensor | None,
+    frame_lens: torch.Tensor | None,
+    pool_embs: torch.Tensor,
+    cand_idx: list[int] | None = None,
+) -> torch.Tensor:
+    """Return 1-D similarity scores against candidate text embeddings."""
+    if retrieval_mode not in ("global", "local"):
+        raise ValueError(
+            f"retrieval_mode must be 'global' or 'local', got {retrieval_mode!r}."
+        )
+    cand = pool_embs if cand_idx is None else pool_embs[cand_idx]
+    if retrieval_mode == "local":
+        if retrieval_frames is None or frame_lens is None:
+            raise ValueError("local retrieval requires retrieval_frames and frame_lens")
+        return frame_text_sim(
+            retrieval_frames, frame_lens, cand,
+        )[0].float()
+    return (pooled.unsqueeze(0) @ cand.T).squeeze(0)
 
 
 # ---------------------------------------------------------------------------

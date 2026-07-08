@@ -31,6 +31,7 @@ def _minimal_config(tmp_path: Path) -> dict:
             "seed_pool_file": str(tmp_path / "seed.txt"),
             "default_user": "default",
             "default_top_k": 50,
+            "retrieval_mode": "local",
             "cache_dir": str(tmp_path / "cache"),
             "batch_text": 128,
             "enrollment_store_dir": str(tmp_path / "enrollments"),
@@ -75,6 +76,9 @@ def test_load_config_interpolates_env(tmp_path: Path, monkeypatch: pytest.Monkey
     assert cfg.to_triton_parameters()["enrollment_cache_max_entries"] == "12"
     assert cfg.to_triton_parameters()["enrollment_cache_device"] == "cpu"
     assert cfg.to_triton_parameters()["enrollment_metadata_touch_interval_sec"] == "42"
+    assert cfg.retrieval.retrieval_mode == "local"
+    assert cfg.to_serve_kwargs()["retrieval_mode"] == "local"
+    assert cfg.to_triton_parameters()["retrieval_mode"] == "local"
 
 
 def test_enrollment_persistence_defaults_to_local_store(tmp_path: Path):
@@ -144,5 +148,6 @@ def test_render_model_repo_uses_yaml_parameters(tmp_path: Path):
     assert 'name: "ENROLLMENT_SCOPE_ID"' in config_text
     assert 'key: "enrollment_store_dir"' in config_text
     assert 'key: "enrollment_metadata_touch_interval_sec"' in config_text
+    assert 'key: "retrieval_mode"' in config_text
     assert 'key: "adapter_ckpt"' not in config_text
     assert (rendered / "rag_asr_retrieve" / "1" / "model.py").is_file()

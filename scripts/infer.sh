@@ -9,9 +9,10 @@ export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 
 GPUS="${RAG_ASR_INFER_GPUS:-${CUDA_VISIBLE_DEVICES:-0}}"
 BASE="${RAG_ASR_BASE_MODEL:-$ROOT/checkpoints/base/amphion_1.7b_merged}"
-ADAPTER="${RAG_ASR_ADAPTER:-$BASE/hotword_adapter/best_adapter.pt}"
+ADAPTER="${RAG_ASR_ADAPTER:-/chenmingjie/lx/AmphionASR/exp/retrieval/amphion-1.7b_retrieval_v2.0/best_adapter.pt}"
 OUT="${RAG_ASR_INFER_OUT:-$ROOT/exp/infer}"
 TOP_K="${RAG_ASR_TOP_K:-50}"
+RETRIEVAL_MODE="${RAG_ASR_RETRIEVAL_MODE:-local}"
 EMBED_DIM="${RAG_ASR_EMBED_DIM:-512}"
 ADAPTER_HIDDEN_DIM="${RAG_ASR_ADAPTER_HIDDEN_DIM:-512}"
 DATA_ROOT="${RAG_ASR_DATA_ROOT:-}"
@@ -70,7 +71,7 @@ _run() {
       --base-model-path "$BASE" --adapter-ckpt "$ADAPTER" \
       --embed-dim "$EMBED_DIM" --adapter-hidden-dim "$ADAPTER_HIDDEN_DIM" \
       --hotword-pool-file "$pool" --supervisions "$sup" --recordings "$rec" \
-      --top-k "$TOP_K" --output "$out"
+      --top-k "$TOP_K" --retrieval-mode "$RETRIEVAL_MODE" --output "$out"
     return
   fi
 
@@ -96,7 +97,8 @@ _run() {
       --base-model-path "$BASE" --adapter-ckpt "$ADAPTER" \
       --embed-dim "$EMBED_DIM" --adapter-hidden-dim "$ADAPTER_HIDDEN_DIM" \
       --hotword-pool-file "$pool" --supervisions "$sup" --recordings "$rec" \
-      --shard-id "$i" --num-shards "$N" --top-k "$TOP_K" --output "$s" &
+      --shard-id "$i" --num-shards "$N" --top-k "$TOP_K" \
+      --retrieval-mode "$RETRIEVAL_MODE" --output "$s" &
     pids+=($!)
   done
   local status=0

@@ -9,7 +9,10 @@ model:
   adapter_subdir: hotword_adapter
   adapter_filename: best_adapter.pt
   # Optional legacy override. Prefer base_model_path/hotword_adapter/best_adapter.pt.
+  # v1.2 global retrieval:
   # adapter_ckpt: checkpoints/adapters/amphion-1.7b_retrieval_v1.2/best_adapter.pt
+  # v2.0 local (GLCLAP) retrieval — align with Amphion hotwords_tower_retrieve.yaml:
+  adapter_ckpt: /chenmingjie/lx/AmphionASR/exp/retrieval/amphion-1.7b_retrieval_v2.0/best_adapter.pt
   embed_dim: 512
   adapter_hidden_dim: 512
 
@@ -22,6 +25,8 @@ retrieval:
   # mutable pool is hotword_pool_dir/default.txt and examples stays read-only.
   # hotword_pool_file: var/hotwords/default.txt
   default_top_k: 50
+  # global = pooled audio·text (v1.2); local = max-over-frame GLCLAP (v2.0)
+  retrieval_mode: local
   cache_dir: var/retrieve_cache
   batch_text: 512
   # Persist embedding tensors and metadata only; raw enrollment audio is not stored.
@@ -40,6 +45,7 @@ triton:
   rendered_model_repo: var/triton_repo
   # Build this conda-pack archive with scripts/build_triton_exec_env.sh.
   exec_env: var/triton-exec-env.tar.gz
+  # Or point to a live conda env, e.g. /path/to/miniconda3/envs/triton-exec
   # backend_dir is auto-derived from tritonserver; set explicitly if needed.
   # backend_dir: /path/to/tritonserver/backends
   # Keep off for the default Triton 24.10 Python 3.10 backend stub. Set this

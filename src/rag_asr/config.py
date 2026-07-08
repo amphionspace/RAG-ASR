@@ -91,6 +91,7 @@ class RetrievalConfig:
     seed_pool_file: Optional[str] = "examples/hotword_pool.txt"
     default_user: str = "default"
     default_top_k: int = 50
+    retrieval_mode: str = "local"
     cache_dir: Optional[str] = "var/retrieve_cache"
     batch_text: int = 512
     enrollment_store_dir: str = "var/enrollments"
@@ -140,6 +141,7 @@ class RagASRConfig:
             "embed_dim": self.model.embed_dim,
             "adapter_hidden_dim": self.model.adapter_hidden_dim,
             "default_top_k": self.retrieval.default_top_k,
+            "retrieval_mode": self.retrieval.retrieval_mode,
             "cache_dir": _resolve_path(self.retrieval.cache_dir, allow_special=True),
             "enrollment_store_dir": _resolve_path(
                 self.retrieval.enrollment_store_dir
@@ -169,6 +171,7 @@ class RagASRConfig:
             if self.model.adapter_hidden_dim is None
             else str(self.model.adapter_hidden_dim),
             "default_top_k": str(self.retrieval.default_top_k),
+            "retrieval_mode": self.retrieval.retrieval_mode,
             "cache_dir": _resolve_path(self.retrieval.cache_dir, allow_special=True) or "",
             "enrollment_store_dir": _resolve_path(
                 self.retrieval.enrollment_store_dir
