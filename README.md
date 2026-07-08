@@ -67,6 +67,28 @@ pip install -e ".[serve]"   # 可选，本地 HTTP 调试服务
 
 新机器上需要先确认三类路径：项目内模型权重、外部数据盘、Triton 运行环境。服务部署只维护一个配置入口：`configs/serve.yaml`。项目内默认模型目录是 `checkpoints/base/amphion_1.7b_merged`，可用软链接指向真实权重；外部训练和评测数据不随仓库分发，需要通过环境变量传入。
 
+### Docker Compose
+
+推荐新机器优先使用 Compose 部署 RAG-ASR 自身的两个服务面：Triton 推理面和 HTTP 管理面。镜像只包含代码、Triton server 和固定的 Python backend 执行环境；大模型权重由宿主机挂载。
+
+```bash
+cd RAG-ASR
+
+# 指向包含 hotword_adapter/best_adapter.pt 的基座模型目录。
+export RAG_ASR_MODEL_DIR=/path/to/amphion_1.7b_merged
+
+docker compose build rag-asr-triton
+docker compose up -d rag-asr-triton rag-asr-http
+
+curl http://127.0.0.1:10001/v2/health/ready
+curl http://127.0.0.1:10001/v2/models/rag_asr_retrieve/ready
+```
+
+Compose 使用 `configs/serve.compose.yaml`，运行数据保存在 `rag-asr-data` volume 的 `/data/rag-asr` 下，包括热词池、检索缓存、enrollment embedding 和渲染后的 Triton model repository。镜像内的 `/opt/rag-asr/triton-exec-env.tar.gz` 是 Triton Python backend execution env 归档，`/opt/rag-asr/triton-exec` 供 HTTP 管理面直接运行。宿主机需要可用的 NVIDIA Container Toolkit。
+若宿主机端口已被占用，可用 `RAG_ASR_TRITON_HTTP_PORT`、`RAG_ASR_TRITON_GRPC_PORT`、`RAG_ASR_TRITON_METRICS_PORT` 和 `RAG_ASR_HTTP_PORT` 覆盖宿主机侧端口；容器内端口和 `configs/serve.compose.yaml` 不变。
+
+### Host mode
+
 最小服务启动流程：
 
 ```bash

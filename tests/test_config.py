@@ -95,6 +95,32 @@ def test_enrollment_persistence_defaults_to_local_store(tmp_path: Path):
     assert cfg.to_serve_kwargs()["enrollment_metadata_touch_interval_sec"] == 300.0
 
 
+def test_compose_config_uses_container_paths():
+    cfg = load_config(PROJECT_ROOT / "configs" / "serve.compose.yaml")
+
+    assert cfg.to_serve_kwargs()["base_model_path"] == (
+        "/models/rag-asr/base/amphion_1.7b_merged"
+    )
+    assert cfg.to_serve_kwargs()["hotword_pool_dir"] == "/data/rag-asr/hotwords"
+    assert cfg.to_serve_kwargs()["enrollment_store_dir"] == "/data/rag-asr/enrollments"
+    assert cfg.to_triton_parameters()["EXECUTION_ENV_PATH"] == (
+        "/opt/rag-asr/triton-exec-env.tar.gz"
+    )
+    assert cfg.triton.backend_dir == "/opt/tritonserver/backends"
+
+
+def test_runtime_constraints_do_not_pin_extras():
+    constraints = PROJECT_ROOT / "docker" / "constraints-runtime.txt"
+
+    for line in constraints.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        package = stripped.split("==", 1)[0].split("<", 1)[0].split(">", 1)[0]
+        assert "[" not in package
+        assert "]" not in package
+
+
 def test_unknown_config_key_fails(tmp_path: Path):
     data = _minimal_config(tmp_path)
     data["model"]["unexpected"] = "bad"

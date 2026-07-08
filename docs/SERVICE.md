@@ -176,6 +176,40 @@ v2 设计与验证见 `docs/TRITON_BATCH_V2_REPORT.md`。
 
 首次部署需要先准备官方 Triton server 本体，再使用总入口创建本项目所需的 conda 环境：
 
+### Docker Compose 部署
+
+新机器优先推荐用 Compose 运行 RAG-ASR 自身的两个服务面，避免在宿主机手工准备 conda 和 Triton server：
+
+```bash
+export RAG_ASR_MODEL_DIR=/path/to/amphion_1.7b_merged
+docker compose build rag-asr-triton
+docker compose up -d rag-asr-triton rag-asr-http
+```
+
+Compose 镜像基于 `nvcr.io/nvidia/tritonserver:24.10-py3`，构建时用镜像自带 Python 3.10 创建 `/opt/rag-asr/triton-exec`，并打包出 `/opt/rag-asr/triton-exec-env.tar.gz` 给 Triton Python backend。`configs/serve.compose.yaml` 使用容器内绝对路径：模型目录挂载到 `/models/rag-asr/base/amphion_1.7b_merged`，运行数据写入 `/data/rag-asr`。宿主机需要 NVIDIA Container Toolkit。
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:10001/v2/health/ready
+curl http://127.0.0.1:10001/v2/models/rag_asr_retrieve/ready
+curl http://127.0.0.1:8080/hotword-pool
+```
+
+若宿主机已有服务占用默认端口，可只覆盖宿主机侧端口；容器内端口和 `configs/serve.compose.yaml` 不变：
+
+```bash
+RAG_ASR_TRITON_HTTP_PORT=11001 \
+RAG_ASR_TRITON_GRPC_PORT=11002 \
+RAG_ASR_TRITON_METRICS_PORT=11003 \
+RAG_ASR_HTTP_PORT=18080 \
+docker compose up -d rag-asr-triton rag-asr-http
+```
+
+### Host-mode 部署
+
+以下步骤用于继续沿用裸机 / systemd / conda 部署。
+
 ### 0. 安装官方 Triton server 本体
 
 官方 Triton server 本体不是 pip 包。上游推荐用 NGC Docker 镜像运行；本项目当前 `scripts/start_triton.sh` 是 host-mode 启动方式，因此需要 host 上存在一个官方 Triton 安装目录，例如 `/opt/tritonserver`。
