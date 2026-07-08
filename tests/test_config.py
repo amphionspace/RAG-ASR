@@ -31,7 +31,7 @@ def _minimal_config(tmp_path: Path) -> dict:
             "seed_pool_file": str(tmp_path / "seed.txt"),
             "default_user": "default",
             "default_top_k": 50,
-            "retrieval_mode": "local",
+            "retrieval_mode": "frame_max",
             "cache_dir": str(tmp_path / "cache"),
             "batch_text": 128,
             "enrollment_store_dir": str(tmp_path / "enrollments"),
@@ -72,13 +72,14 @@ def test_load_config_interpolates_env(tmp_path: Path, monkeypatch: pytest.Monkey
     assert cfg.to_serve_kwargs()["hotword_pool_file"] == str(tmp_path / "env_pool.txt")
     assert cfg.to_serve_kwargs()["hotword_pool_dir"] == str(tmp_path / "pools")
     assert cfg.to_triton_parameters()["default_user"] == "default"
-    assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter"
+    assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter/frame_max"
     assert cfg.to_triton_parameters()["enrollment_cache_max_entries"] == "12"
     assert cfg.to_triton_parameters()["enrollment_cache_device"] == "cpu"
     assert cfg.to_triton_parameters()["enrollment_metadata_touch_interval_sec"] == "42"
-    assert cfg.retrieval.retrieval_mode == "local"
-    assert cfg.to_serve_kwargs()["retrieval_mode"] == "local"
-    assert cfg.to_triton_parameters()["retrieval_mode"] == "local"
+    assert cfg.retrieval.retrieval_mode == "frame_max"
+    assert cfg.to_serve_kwargs()["retrieval_mode"] == "frame_max"
+    assert cfg.to_triton_parameters()["retrieval_mode"] == "frame_max"
+    assert cfg.to_serve_kwargs()["adapter_subdir"] == "hotword_adapter/frame_max"
 
 
 def test_enrollment_persistence_defaults_to_local_store(tmp_path: Path):
@@ -131,6 +132,59 @@ def test_unknown_config_key_fails(tmp_path: Path):
 
     with pytest.raises(ValueError, match="unknown keys"):
         load_config(_write_yaml(tmp_path / "serve.yaml", data))
+
+
+def test_adapter_ckpts_selects_checkpoint_from_retrieval_mode(tmp_path: Path):
+    data = _minimal_config(tmp_path)
+    pooled = tmp_path / "pooled.pt"
+    frame_max = tmp_path / "frame_max.pt"
+    data["model"]["adapter_ckpts"] = {
+        "pooled": str(pooled),
+        "frame_max": str(frame_max),
+    }
+
+    cfg = load_config(_write_yaml(tmp_path / "serve.yaml", data))
+
+    assert cfg.to_serve_kwargs()["adapter_ckpt"] == str(frame_max)
+    assert cfg.to_triton_parameters()["adapter_ckpt"] == str(frame_max)
+
+    data["retrieval"]["retrieval_mode"] = "pooled"
+    cfg = load_config(_write_yaml(tmp_path / "serve.yaml", data))
+
+    assert cfg.to_serve_kwargs()["adapter_ckpt"] == str(pooled)
+    assert cfg.to_triton_parameters()["adapter_ckpt"] == str(pooled)
+
+
+def test_retrieval_mode_selects_adapter_subdir_without_explicit_ckpt(tmp_path: Path):
+    data = _minimal_config(tmp_path)
+
+    cfg = load_config(_write_yaml(tmp_path / "serve.yaml", data))
+
+    assert cfg.to_serve_kwargs()["adapter_ckpt"] is None
+    assert cfg.to_serve_kwargs()["adapter_subdir"] == "hotword_adapter/frame_max"
+    assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter/frame_max"
+
+    data["retrieval"]["retrieval_mode"] = "pooled"
+    cfg = load_config(_write_yaml(tmp_path / "serve.yaml", data))
+
+    assert cfg.to_serve_kwargs()["adapter_subdir"] == "hotword_adapter/pooled"
+    assert cfg.to_triton_parameters()["adapter_subdir"] == "hotword_adapter/pooled"
+
+
+def test_legacy_retrieval_mode_aliases_still_select_adapters(tmp_path: Path):
+    data = _minimal_config(tmp_path)
+    pooled = tmp_path / "pooled.pt"
+    frame_max = tmp_path / "frame_max.pt"
+    data["retrieval"]["retrieval_mode"] = "local"
+    data["model"]["adapter_ckpts"] = {
+        "global": str(pooled),
+        "local": str(frame_max),
+    }
+
+    cfg = load_config(_write_yaml(tmp_path / "serve.yaml", data))
+
+    assert cfg.retrieval.retrieval_mode == "frame_max"
+    assert cfg.to_serve_kwargs()["adapter_ckpt"] == str(frame_max)
 
 
 def test_resolve_hotword_adapter_prefers_explicit_path(tmp_path: Path):

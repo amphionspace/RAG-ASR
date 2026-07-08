@@ -32,6 +32,7 @@ from rag_asr.model_layout import (
     DEFAULT_HOTWORD_ADAPTER_SUBDIR,
     resolve_hotword_adapter,
 )
+from rag_asr.retrieval_mode import FRAME_MAX_RETRIEVAL_MODE, normalize_retrieval_mode
 
 logger = logging.getLogger(__name__)
 _USER_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -51,7 +52,7 @@ class ServeConfig:
     embed_dim: int = 512
     adapter_hidden_dim: Optional[int] = 512
     default_top_k: int = 50
-    retrieval_mode: str = "global"
+    retrieval_mode: str = "pooled"
     cache_dir: Optional[str] = "_retrieve_cache"
     device: str = "cuda"
     num_mel_bins: int = 128
@@ -108,6 +109,7 @@ class RAGASRRetriever:
     def __init__(self, cfg: ServeConfig):
         from rag_asr.model_loader import load_towers
 
+        cfg.retrieval_mode = normalize_retrieval_mode(cfg.retrieval_mode)
         self.cfg = cfg
         self._device = torch.device(cfg.device)
         self.default_user = self._resolve_user(cfg.default_user)
@@ -1085,7 +1087,7 @@ class RAGASRRetriever:
 
         from rag_asr.dual_tower import score_retrieval
 
-        _local = self.cfg.retrieval_mode == "local"
+        _frame_max = self.cfg.retrieval_mode == FRAME_MAX_RETRIEVAL_MODE
         results: list[InferResult] = []
         for i, top_k in enumerate(top_k_values):
             pool = self._get_or_load_pool(user_ids[i])
@@ -1095,9 +1097,9 @@ class RAGASRRetriever:
             pool_size = len(hotword_pool)
             top_k = 0 if not enable_hotword_recalls[i] else min(max(int(top_k), 0), pool_size)
             if top_k:
-                if _local:
+                if _frame_max:
                     scores = score_retrieval(
-                        retrieval_mode="local",
+                        retrieval_mode="frame_max",
                         pooled=pooled[i],
                         retrieval_frames=retrieval_frames[i : i + 1],
                         frame_lens=proj_lens[i : i + 1],
@@ -1105,7 +1107,7 @@ class RAGASRRetriever:
                     )
                 else:
                     scores = score_retrieval(
-                        retrieval_mode="global",
+                        retrieval_mode="pooled",
                         pooled=pooled[i],
                         retrieval_frames=None,
                         frame_lens=None,
@@ -1336,7 +1338,7 @@ class RAGASRRetriever:
                 if params.get("adapter_hidden_dim")
                 else 512,
                 default_top_k=int(params.get("default_top_k", "50")),
-                retrieval_mode=params.get("retrieval_mode", "global"),
+                retrieval_mode=params.get("retrieval_mode", "pooled"),
                 cache_dir=params.get("cache_dir", "_retrieve_cache"),
                 device=params.get("device", "cuda"),
                 enrollment_store_dir=params.get(

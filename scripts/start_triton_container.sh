@@ -97,7 +97,8 @@ fi
 
 if [[ -z "$HOTWORD_ADAPTER_PATH" || ! -f "$HOTWORD_ADAPTER_PATH" ]]; then
   echo "Invalid hotword adapter: $HOTWORD_ADAPTER_PATH"
-  echo "Expected base_model_path/hotword_adapter/best_adapter.pt or set model.adapter_ckpt."
+  echo "Expected base_model_path/hotword_adapter/{pooled,frame_max}/best_adapter.pt,"
+  echo "set model.adapter_ckpt, or configure model.adapter_ckpts for retrieval.retrieval_mode."
   exit 1
 fi
 

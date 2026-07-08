@@ -20,6 +20,7 @@ from rag_asr.cache import (
 )
 from rag_asr.dataset import tokenise_words
 from rag_asr.model_loader import load_towers
+from rag_asr.retrieval_mode import FRAME_MAX_RETRIEVAL_MODE, normalize_retrieval_mode
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ def retrieve_neural(
     cache_dir: Optional[str | Path] = None,
     shard_id: int = 0,
     num_shards: int = 1,
-    retrieval_mode: str = "global",
+    retrieval_mode: str = "pooled",
 ) -> dict[str, dict]:
     """Retrieve top-K hotwords per utterance using trained dual-tower adapters.
 
@@ -180,12 +181,8 @@ def retrieve_neural(
     """
     if top_k_max <= 0:
         raise ValueError(f"retrieve_neural: top_k_max must be > 0, got {top_k_max!r}.")
-    if retrieval_mode not in ("global", "local"):
-        raise ValueError(
-            f"retrieve_neural: retrieval_mode must be 'global' or 'local', "
-            f"got {retrieval_mode!r}."
-        )
-    _local = retrieval_mode == "local"
+    retrieval_mode = normalize_retrieval_mode(retrieval_mode)
+    _frame_max = retrieval_mode == FRAME_MAX_RETRIEVAL_MODE
 
     per_item_candidates: Optional[dict[str, list[str]]] = None
     pool_word_to_idx: Optional[dict[str, int]] = None
@@ -276,7 +273,7 @@ def retrieve_neural(
         pool_word_to_idx = {w: i for i, w in enumerate(hotword_pool)}
 
     _faiss_index = None
-    if not _local and per_item_candidates is None:
+    if not _frame_max and per_item_candidates is None:
         try:
             import faiss  # type: ignore
 
@@ -348,7 +345,7 @@ def retrieve_neural(
         feat_lens = feat_lens.to(_device)
 
         with torch.no_grad():
-            if _local:
+            if _frame_max:
                 _, a_frames, a_frame_lens = audio_tower(
                     features, feat_lens, return_frames=True,
                 )
@@ -357,14 +354,14 @@ def retrieve_neural(
                 a_embs = audio_tower(features, feat_lens)
 
         batch_indices: list[list[int]] | None = None
-        if not _local and per_item_candidates is None and _faiss_index is not None:
+        if not _frame_max and per_item_candidates is None and _faiss_index is not None:
             import faiss  # type: ignore
 
             _, batch_idx = _faiss_index.search(
                 a_embs.cpu().numpy().astype("float32"), topk_k,
             )
             batch_indices = [row.tolist() for row in batch_idx]
-        elif not _local and per_item_candidates is None:
+        elif not _frame_max and per_item_candidates is None:
             with torch.no_grad():
                 batch_scores = a_embs @ pool_embs_gpu.T
                 batch_indices = batch_scores.topk(topk_k, dim=1).indices.cpu().tolist()
@@ -372,9 +369,9 @@ def retrieve_neural(
         from rag_asr.dual_tower import score_retrieval
 
         def _score_against(i: int, cand_idx=None):
-            if _local:
+            if _frame_max:
                 return score_retrieval(
-                    retrieval_mode="local",
+                    retrieval_mode="frame_max",
                     pooled=a_frames[i],
                     retrieval_frames=a_frames[i : i + 1],
                     frame_lens=a_frame_lens[i : i + 1],
@@ -382,7 +379,7 @@ def retrieve_neural(
                     cand_idx=cand_idx,
                 )
             return score_retrieval(
-                retrieval_mode="global",
+                retrieval_mode="pooled",
                 pooled=a_embs[i],
                 retrieval_frames=None,
                 frame_lens=None,

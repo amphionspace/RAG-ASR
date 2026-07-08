@@ -63,6 +63,8 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 
+from rag_asr.retrieval_mode import FRAME_MAX_RETRIEVAL_MODE, normalize_retrieval_mode
+
 # Installed / editable: ``rag_asr`` is importable via PYTHONPATH=src or pip install -e .
 
 logger = logging.getLogger(__name__)
@@ -228,9 +230,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    default=[1, 2, 3, 4, 5, 10, 15, 20],
                    help="K values for Recall@K on validation set. "
                         "Best checkpoint is selected by the smallest K.")
-    p.add_argument("--eval-retrieval", choices=["auto", "global", "local"],
-                   default="auto",
-                   help="Validation Recall@K scoring. 'auto' follows --loss-type.")
+    p.add_argument(
+        "--eval-retrieval",
+        choices=["auto", "pooled", "frame_max", "global", "local"],
+        default="auto",
+        help="Validation Recall@K scoring. 'auto' follows --loss-type. "
+             "global/local are legacy aliases.",
+    )
     # --- Mel feature extractor ---
     p.add_argument("--num-mel-bins", type=int, default=128,
                    help="Number of mel filter banks (128 for Whisper-style).")
@@ -394,7 +400,7 @@ def evaluate_recall_at_k(
 ) -> dict[int, float]:
     """Compute Recall@K on a validation split.
 
-    ``use_local``: global = pooled audio·text; local = max-over-frame GLCLAP.
+    ``use_local``: pooled = pooled audio·text; frame_max = max-over-frame GLCLAP.
     """
     audio_tower.eval()
     text_tower.eval()
@@ -642,11 +648,13 @@ def train(args: argparse.Namespace):
     if args.eval_retrieval == "auto":
         use_local_eval = want_local
     else:
-        use_local_eval = (args.eval_retrieval == "local")
+        use_local_eval = (
+            normalize_retrieval_mode(args.eval_retrieval) == FRAME_MAX_RETRIEVAL_MODE
+        )
     if is_main:
         logger.info(
             "Validation retrieval: %s (--eval-retrieval=%s)",
-            "local (max-over-frame)" if use_local_eval else "global (pooled)",
+            "frame_max (max-over-frame)" if use_local_eval else "pooled",
             args.eval_retrieval,
         )
 

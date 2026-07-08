@@ -8,11 +8,28 @@ cd "$ROOT"
 export PYTHONPATH="$ROOT/src:${PYTHONPATH:-}"
 
 GPUS="${RAG_ASR_INFER_GPUS:-${CUDA_VISIBLE_DEVICES:-0}}"
-BASE="${RAG_ASR_BASE_MODEL:-$ROOT/checkpoints/base/amphion_1.7b_merged}"
-ADAPTER="${RAG_ASR_ADAPTER:-/chenmingjie/lx/AmphionASR/exp/retrieval/amphion-1.7b_retrieval_v2.0/best_adapter.pt}"
+BASE="${RAG_ASR_BASE_MODEL:-/home/ubuntu/models/hf/Amphion/AmphionASR-1.7B}"
 OUT="${RAG_ASR_INFER_OUT:-$ROOT/exp/infer}"
 TOP_K="${RAG_ASR_TOP_K:-50}"
-RETRIEVAL_MODE="${RAG_ASR_RETRIEVAL_MODE:-local}"
+RETRIEVAL_MODE="${RAG_ASR_RETRIEVAL_MODE:-frame_max}"
+POOLED_ADAPTER="${RAG_ASR_POOLED_ADAPTER:-$BASE/hotword_adapter/pooled/best_adapter.pt}"
+FRAME_MAX_ADAPTER="${RAG_ASR_FRAME_MAX_ADAPTER:-$BASE/hotword_adapter/frame_max/best_adapter.pt}"
+case "$RETRIEVAL_MODE" in
+  pooled|global)
+    RETRIEVAL_MODE="pooled"
+    DEFAULT_ADAPTER="$POOLED_ADAPTER"
+    ;;
+  frame_max|frame-max|local)
+    RETRIEVAL_MODE="frame_max"
+    DEFAULT_ADAPTER="$FRAME_MAX_ADAPTER"
+    ;;
+  *)
+    echo "Invalid RAG_ASR_RETRIEVAL_MODE: $RETRIEVAL_MODE" >&2
+    echo "Use pooled or frame_max." >&2
+    exit 1
+    ;;
+esac
+ADAPTER="${RAG_ASR_ADAPTER:-$DEFAULT_ADAPTER}"
 EMBED_DIM="${RAG_ASR_EMBED_DIM:-512}"
 ADAPTER_HIDDEN_DIM="${RAG_ASR_ADAPTER_HIDDEN_DIM:-512}"
 DATA_ROOT="${RAG_ASR_DATA_ROOT:-}"

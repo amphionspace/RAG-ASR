@@ -44,6 +44,8 @@ import torch.distributed.nn
 import torch.nn as nn
 import torch.nn.functional as F
 
+from rag_asr.retrieval_mode import FRAME_MAX_RETRIEVAL_MODE, normalize_retrieval_mode
+
 
 # ---------------------------------------------------------------------------
 # Utility: length-masked mean pooling
@@ -852,14 +854,13 @@ def score_retrieval(
     cand_idx: list[int] | None = None,
 ) -> torch.Tensor:
     """Return 1-D similarity scores against candidate text embeddings."""
-    if retrieval_mode not in ("global", "local"):
-        raise ValueError(
-            f"retrieval_mode must be 'global' or 'local', got {retrieval_mode!r}."
-        )
+    retrieval_mode = normalize_retrieval_mode(retrieval_mode)
     cand = pool_embs if cand_idx is None else pool_embs[cand_idx]
-    if retrieval_mode == "local":
+    if retrieval_mode == FRAME_MAX_RETRIEVAL_MODE:
         if retrieval_frames is None or frame_lens is None:
-            raise ValueError("local retrieval requires retrieval_frames and frame_lens")
+            raise ValueError(
+                "frame_max retrieval requires retrieval_frames and frame_lens"
+            )
         return frame_text_sim(
             retrieval_frames, frame_lens, cand,
         )[0].float()

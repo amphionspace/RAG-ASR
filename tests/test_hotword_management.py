@@ -50,7 +50,7 @@ def _fake_retriever(tmp_path) -> RAGASRRetriever:
         seed_pool_file=None,
         default_user="default",
         embed_dim=4,
-        retrieval_mode="global",
+        retrieval_mode="pooled",
         cache_dir=None,
         device="cpu",
         enrollment_store_dir=str(tmp_path / "enrollments"),
