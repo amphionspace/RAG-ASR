@@ -1,0 +1,37 @@
+# RAG-ASR Docker Compose service configuration.
+# Paths are container paths. Mount the model directory and /data/rag-asr in
+# docker-compose.yml or with equivalent Compose overrides.
+
+model:
+  base_model_path: /models/rag-asr/base/amphion_1.7b_merged
+  adapter_subdir: hotword_adapter
+  adapter_filename: best_adapter.pt
+  embed_dim: 512
+  adapter_hidden_dim: 512
+
+retrieval:
+  hotword_pool_dir: /data/rag-asr/hotwords
+  seed_pool_file: /opt/rag-asr/examples/hotword_pool.txt
+  default_user: default
+  default_top_k: 50
+  cache_dir: /data/rag-asr/retrieve_cache
+  batch_text: 512
+  enrollment_store_dir: /data/rag-asr/enrollments
+  enrollment_cache_max_entries: 256
+  enrollment_cache_device: auto
+  enrollment_metadata_touch_interval_sec: 300
+
+runtime:
+  device: cuda
+  cuda_visible_devices: "0"
+  num_mel_bins: 128
+
+triton:
+  model_repo: /opt/rag-asr/triton
+  rendered_model_repo: /data/rag-asr/triton_repo
+  exec_env: /opt/rag-asr/triton-exec-env.tar.gz
+  backend_dir: /opt/tritonserver/backends
+  python_stub_link: off
+  http_port: 10001
+  grpc_port: 10002
+  metrics_port: 10003

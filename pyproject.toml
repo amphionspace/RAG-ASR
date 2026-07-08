@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 faiss = ["faiss-cpu"]
-serve = ["fastapi", "uvicorn", "python-multipart"]
+serve = ["fastapi", "uvicorn", "python-multipart", "librosa"]
 triton = ["tritonclient[http]"]
 eval = ["requests", "librosa"]
 all = ["faiss-cpu", "fastapi", "uvicorn", "python-multipart", "tritonclient[http]", "requests", "librosa"]
