@@ -85,6 +85,7 @@ curl http://127.0.0.1:10001/v2/models/rag_asr_retrieve/ready
 ```
 
 Compose 使用 `configs/serve.compose.yaml`，运行数据保存在 `rag-asr-data` volume 的 `/data/rag-asr` 下，包括热词池、检索缓存、enrollment embedding 和渲染后的 Triton model repository。镜像内的 `/opt/rag-asr/triton-exec-env.tar.gz` 是 Triton Python backend execution env 归档，`/opt/rag-asr/triton-exec` 供 HTTP 管理面直接运行。宿主机需要可用的 NVIDIA Container Toolkit。
+若宿主机端口已被占用，可用 `RAG_ASR_TRITON_HTTP_PORT`、`RAG_ASR_TRITON_GRPC_PORT`、`RAG_ASR_TRITON_METRICS_PORT` 和 `RAG_ASR_HTTP_PORT` 覆盖宿主机侧端口；容器内端口和 `configs/serve.compose.yaml` 不变。
 
 ### Host mode
 

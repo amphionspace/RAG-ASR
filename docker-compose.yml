@@ -11,9 +11,9 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
     gpus: all
     ports:
-      - "10001:10001"
-      - "10002:10002"
-      - "10003:10003"
+      - "${RAG_ASR_TRITON_HTTP_PORT:-10001}:10001"
+      - "${RAG_ASR_TRITON_GRPC_PORT:-10002}:10002"
+      - "${RAG_ASR_TRITON_METRICS_PORT:-10003}:10003"
     volumes:
       - ${RAG_ASR_MODEL_DIR:-./checkpoints/base/amphion_1.7b_merged}:/models/rag-asr/base/amphion_1.7b_merged:ro
       - rag-asr-data:/data/rag-asr
@@ -44,7 +44,7 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
     gpus: all
     ports:
-      - "8080:8080"
+      - "${RAG_ASR_HTTP_PORT:-8080}:8080"
     volumes:
       - ${RAG_ASR_MODEL_DIR:-./checkpoints/base/amphion_1.7b_merged}:/models/rag-asr/base/amphion_1.7b_merged:ro
       - rag-asr-data:/data/rag-asr

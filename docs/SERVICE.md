@@ -196,6 +196,16 @@ curl http://127.0.0.1:10001/v2/models/rag_asr_retrieve/ready
 curl http://127.0.0.1:8080/hotword-pool
 ```
 
+若宿主机已有服务占用默认端口，可只覆盖宿主机侧端口；容器内端口和 `configs/serve.compose.yaml` 不变：
+
+```bash
+RAG_ASR_TRITON_HTTP_PORT=11001 \
+RAG_ASR_TRITON_GRPC_PORT=11002 \
+RAG_ASR_TRITON_METRICS_PORT=11003 \
+RAG_ASR_HTTP_PORT=18080 \
+docker compose up -d rag-asr-triton rag-asr-http
+```
+
 ### Host-mode 部署
 
 以下步骤用于继续沿用裸机 / systemd / conda 部署。
