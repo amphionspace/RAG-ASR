@@ -7,6 +7,7 @@
 | 脚本 | 语义 |
 |------|------|
 | `scripts/start_triton.sh` | 启动 Triton 在线服务；读取 `configs/serve.yaml` 或 `RAG_ASR_CONFIG`，渲染运行时 model repository 到 `var/triton_repo` |
+| `scripts/start_triton_container.sh` | 容器内启动 Triton；读取 `configs/serve.compose.yaml` 或 `RAG_ASR_CONFIG`，不依赖 conda 激活 |
 | `scripts/serve_http.sh` | 启动 HTTP 管理/调试服务；提供热词池查询、增删、清空、重载，enrollment embedding 管理和 `/retrieve` 调试接口 |
 | `scripts/hotword_status.sh` | 查看当前 Triton 热词服务 live/ready、指定热词池总量、样例热词和关键配置；默认连 `localhost:10001`、热词池为 `default` |
 | `scripts/triton_hotword_client.py` | Triton 热词客户端；使用 `--hotword-pool-id` 指定热词池 ID；生产管理推荐使用 HTTP 管理服务 |
@@ -20,6 +21,8 @@
 ## 服务配置
 
 在线服务只维护一个配置入口：`configs/serve.yaml`。`scripts/start_triton.sh`、`scripts/serve_http.sh` 和压测脚本默认读取这份配置；如需维护另一套部署配置，可以用 `RAG_ASR_CONFIG` 指向同 schema 的 YAML 文件。
+
+容器部署使用 `configs/serve.compose.yaml`，路径全部是容器内绝对路径：模型挂到 `/models/rag-asr/base/amphion_1.7b_merged`，热词池、缓存、enrollment 和渲染后的 model repository 写到 `/data/rag-asr`。Compose 默认创建 `rag-asr-data` volume，并用同一个镜像启动 `rag-asr-triton` 与 `rag-asr-http`。
 
 ## 离线脚本环境变量
 
@@ -39,6 +42,8 @@
 `scripts/build_triton_server_env.sh` 创建启动 Triton server 的 conda 环境，默认名为 `triton`，安装 `tritonclient[http]` 和 `PyYAML`，并绑定已有官方 Triton server 安装。Triton server 本体不是 pip 包；裸机部署需先准备 `/opt/tritonserver` 这类官方安装，或用 `RAG_ASR_TRITONSERVER_ROOT` 指定实际路径。安装官方 Triton server 本体的步骤见 [docs/SERVICE.md](SERVICE.md)。环境名可用 `RAG_ASR_TRITON_SERVER_ENV_NAME` 覆盖；启动时 `scripts/start_triton.sh` 默认激活同名环境，也可用 `RAG_ASR_TRITON_CONDA_ENV` 指向已有 server 环境。
 
 `scripts/build_triton_exec_env.sh` 创建 Triton Python backend 的执行环境，默认名为 `triton-exec`。它会按 `CONDA`、`CONDA_EXE`、`conda` 命令、`CONDA_PREFIX` 的顺序寻找 conda。输出归档默认写到 `var/triton-exec-env.tar.gz`，可用 `RAG_ASR_TRITON_EXEC_ENV_TAR` 指向共享盘；环境名可用 `RAG_ASR_TRITON_EXEC_ENV_NAME` 覆盖。该执行环境的 Python 版本必须匹配 Triton Python backend stub；默认 `24.10-py3` 对应 Python 3.10，可用 `RAG_ASR_TRITON_EXEC_PYTHON` 覆盖，并固定安装 `numpy<2`。Triton Python stub symlink 在 `configs/serve.yaml` 的 `triton.python_stub_link` 配置，设为 `off` 或 `none` 时 `start_triton.sh` 不自动创建。如果 Triton 返回的输出 shape 正确但 `binary_data_size=0`，通常是该执行环境与 Python backend stub ABI 不匹配，先重建执行环境归档再重启 Triton。
+
+Docker Compose 部署不调用 `build_envs.sh`。`docker/rag-asr.Dockerfile` 会在镜像构建时用 Triton 24.10 镜像自带的 Python 3.10 创建 `/opt/rag-asr/triton-exec`，再打包为 `/opt/rag-asr/triton-exec-env.tar.gz` 供 Triton Python backend 使用；依赖版本由 `docker/constraints-runtime.txt` 约束，constraints 文件只 pin canonical package name，extras 只出现在安装命令中。
 
 `scripts/infer.sh` 使用 `RAG_ASR_DATA_ROOT` 推导中英文测试 manifest，并使用 `RAG_ASR_HOTWORD_ROOT` 推导 `zh-10k.txt` 和 `en-10k.txt`。目录不一致时可设置 `RAG_ASR_CV_ZH_INFER_DIR`、`RAG_ASR_CV_EN_INFER_DIR`、`RAG_ASR_ZH_HOTWORD_POOL`、`RAG_ASR_EN_HOTWORD_POOL`，或直接设置 `RAG_ASR_ZH_SUPERVISIONS`、`RAG_ASR_ZH_RECORDINGS`、`RAG_ASR_EN_SUPERVISIONS`、`RAG_ASR_EN_RECORDINGS`。GPU 列表来自 `RAG_ASR_INFER_GPUS`，未设置时使用 `CUDA_VISIBLE_DEVICES`，再退回单卡 `0`。
 

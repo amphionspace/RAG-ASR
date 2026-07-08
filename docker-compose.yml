@@ -1,0 +1,56 @@
+services:
+  rag-asr-triton:
+    build:
+      context: .
+      dockerfile: docker/rag-asr.Dockerfile
+    image: rag-asr:compose
+    command: ["/opt/rag-asr/scripts/start_triton_container.sh"]
+    environment:
+      RAG_ASR_CONFIG: /opt/rag-asr/configs/serve.compose.yaml
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    gpus: all
+    ports:
+      - "${RAG_ASR_TRITON_HTTP_PORT:-10001}:10001"
+      - "${RAG_ASR_TRITON_GRPC_PORT:-10002}:10002"
+      - "${RAG_ASR_TRITON_METRICS_PORT:-10003}:10003"
+    volumes:
+      - ${RAG_ASR_MODEL_DIR:-./checkpoints/base/amphion_1.7b_merged}:/models/rag-asr/base/amphion_1.7b_merged:ro
+      - rag-asr-data:/data/rag-asr
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:10001/v2/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
+
+  rag-asr-http:
+    image: rag-asr:compose
+    build:
+      context: .
+      dockerfile: docker/rag-asr.Dockerfile
+    command:
+      - /opt/rag-asr/triton-exec/bin/python
+      - /opt/rag-asr/scripts/serve_http.py
+      - --config
+      - /opt/rag-asr/configs/serve.compose.yaml
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    environment:
+      RAG_ASR_CONFIG: /opt/rag-asr/configs/serve.compose.yaml
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+    gpus: all
+    ports:
+      - "${RAG_ASR_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ${RAG_ASR_MODEL_DIR:-./checkpoints/base/amphion_1.7b_merged}:/models/rag-asr/base/amphion_1.7b_merged:ro
+      - rag-asr-data:/data/rag-asr
+    depends_on:
+      rag-asr-triton:
+        condition: service_started
+
+volumes:
+  rag-asr-data:
