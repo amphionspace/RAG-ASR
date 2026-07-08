@@ -50,6 +50,7 @@ def _fake_retriever(tmp_path) -> RAGASRRetriever:
         seed_pool_file=None,
         default_user="default",
         embed_dim=4,
+        retrieval_mode="pooled",
         cache_dir=None,
         device="cpu",
         enrollment_store_dir=str(tmp_path / "enrollments"),
@@ -364,7 +365,8 @@ def test_results_can_disable_hotword_recall(tmp_path) -> None:
             pooled = torch.ones(1, 4)
             proj = torch.ones(1, 2, 4)
             proj_lens = torch.tensor([2], dtype=torch.long)
-            return pooled, proj, proj_lens
+            retrieval_frames = torch.ones(1, 2, 4)
+            return pooled, proj, proj_lens, retrieval_frames
 
     retriever.audio_tower = _AudioTower()
 

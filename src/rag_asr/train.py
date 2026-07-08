@@ -63,6 +63,8 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 
+from rag_asr.retrieval_mode import FRAME_MAX_RETRIEVAL_MODE, normalize_retrieval_mode
+
 # Installed / editable: ``rag_asr`` is importable via PYTHONPATH=src or pip install -e .
 
 logger = logging.getLogger(__name__)
@@ -161,6 +163,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Weight for text→audio loss direction.",
     )
     p.add_argument(
+        "--loss-type", choices=["global", "global_local"], default="global",
+        help="Contrastive loss formulation. "
+             "'global' = CLAP-style pooled audio only. "
+             "'global_local' = GLCLAP: L_global + w_local * L_local.",
+    )
+    p.add_argument(
+        "--loss-w-local", type=float, default=1.0,
+        help="Weight of the GLCLAP local loss term (loss-type=global_local).",
+    )
+    p.add_argument(
+        "--glclap-global-text", choices=["transcript", "hotword"],
+        default="transcript",
+        help="Text for GLCLAP global branch when loss-type=global_local.",
+    )
+    p.add_argument(
+        "--transcript-max-len", type=int, default=64,
+        help="Max token length for full transcriptions (GLCLAP global branch).",
+    )
+    p.add_argument(
         "--resume", default=None, metavar="PATH",
         help="Path to a previously saved adapter checkpoint to resume from.",
     )
@@ -209,6 +230,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    default=[1, 2, 3, 4, 5, 10, 15, 20],
                    help="K values for Recall@K on validation set. "
                         "Best checkpoint is selected by the smallest K.")
+    p.add_argument(
+        "--eval-retrieval",
+        choices=["auto", "pooled", "frame_max", "global", "local"],
+        default="auto",
+        help="Validation Recall@K scoring. 'auto' follows --loss-type. "
+             "global/local are legacy aliases.",
+    )
     # --- Mel feature extractor ---
     p.add_argument("--num-mel-bins", type=int, default=128,
                    help="Number of mel filter banks (128 for Whisper-style).")
@@ -368,16 +396,19 @@ def evaluate_recall_at_k(
     ks: list[int],
     device: torch.device,
     batch_text: int = 512,
+    use_local: bool = False,
 ) -> dict[int, float]:
     """Compute Recall@K on a validation split.
 
-    ``vocab_or_by_lang`` is either a flat ``list[str]`` (legacy) or a
-    ``dict`` with keys ``en`` / ``zh`` for language-specific retrieval pools.
+    ``use_local``: pooled = pooled audio·text; frame_max = max-over-frame GLCLAP.
     """
     audio_tower.eval()
     text_tower.eval()
 
     from rag_asr.dataset import tokenise_words
+    from rag_asr.dual_tower import frame_text_sim
+
+    _store = (lambda t: t) if use_local else (lambda t: t.cpu())
 
     bilingual = isinstance(vocab_or_by_lang, dict) and "all" not in vocab_or_by_lang
     if bilingual:
@@ -389,7 +420,7 @@ def evaluate_recall_at_k(
             for i in range(0, len(vocab), batch_text):
                 chunk = vocab[i : i + batch_text]
                 ids, mask = tokenise_words(chunk, tokenizer, device=device)
-                parts.append(text_tower(ids, mask).cpu())
+                parts.append(_store(text_tower(ids, mask)))
             vocab_embs_by_lang[lang] = torch.cat(parts, dim=0)
     else:
         vocab = vocab_or_by_lang["all"] if isinstance(vocab_or_by_lang, dict) else vocab_or_by_lang
@@ -398,7 +429,7 @@ def evaluate_recall_at_k(
         for i in range(0, len(vocab), batch_text):
             chunk = vocab[i : i + batch_text]
             ids, mask = tokenise_words(chunk, tokenizer, device=device)
-            vocab_embs_parts.append(text_tower(ids, mask).cpu())
+            vocab_embs_parts.append(_store(text_tower(ids, mask)))
         vocab_embs = torch.cat(vocab_embs_parts, dim=0)
 
     max_k = max(ks)
@@ -411,7 +442,12 @@ def evaluate_recall_at_k(
         hotwords_batch = batch["hotwords"]
         langs_batch = batch.get("langs")
 
-        a_embs = audio_tower(features, feature_lens).cpu()
+        if use_local:
+            _, a_frames, a_frame_lens = audio_tower(
+                features, feature_lens, return_frames=True,
+            )
+        else:
+            a_embs = audio_tower(features, feature_lens).cpu()
 
         for i, gt_hotwords in enumerate(hotwords_batch):
             if not gt_hotwords:
@@ -421,7 +457,12 @@ def evaluate_recall_at_k(
                 vocab = vocab_by_lang[lang]
                 vocab_embs = vocab_embs_by_lang[lang]
             gt_set = {h.lower() for h in gt_hotwords}
-            sims = a_embs[i] @ vocab_embs.T
+            if use_local:
+                sims = frame_text_sim(
+                    a_frames[i : i + 1], a_frame_lens[i : i + 1], vocab_embs,
+                )[0].cpu()
+            else:
+                sims = a_embs[i] @ vocab_embs.T
             topk_idx = sims.topk(min(max_k, sims.shape[0])).indices.tolist()
             for k in ks:
                 topk_k = {vocab[j].lower() for j in topk_idx[:k]}
@@ -546,6 +587,9 @@ def train(args: argparse.Namespace):
         AmphionAudioTower,
         AmphionTextTower,
         per_positive_infonce_loss,
+        per_positive_infonce_loss_local,
+        symmetric_infonce_loss,
+        text2audio_infonce_loss_local,
     )
     from rag_asr.model_loader import load_base_model, load_tokenizer
 
@@ -593,6 +637,26 @@ def train(args: argparse.Namespace):
                     args.temperature, log_scale.item(), 1.0 / log_scale.exp().item(),
                     args.learnable_temperature)
         logger.info("Loss weights: w_a2t=%.2f  w_t2a=%.2f", args.loss_w_a2t, args.loss_w_t2a)
+        logger.info(
+            "Loss type: %s%s", args.loss_type,
+            f"  (global_text={args.glclap_global_text}, "
+            f"w_local={args.loss_w_local:.2f})"
+            if args.loss_type == "global_local" else "",
+        )
+
+    want_local = (args.loss_type == "global_local")
+    if args.eval_retrieval == "auto":
+        use_local_eval = want_local
+    else:
+        use_local_eval = (
+            normalize_retrieval_mode(args.eval_retrieval) == FRAME_MAX_RETRIEVAL_MODE
+        )
+    if is_main:
+        logger.info(
+            "Validation retrieval: %s (--eval-retrieval=%s)",
+            "frame_max (max-over-frame)" if use_local_eval else "pooled",
+            args.eval_retrieval,
+        )
 
     # ------------------------------------------------------------------
     # 3. Optimiser & scheduler
@@ -674,6 +738,7 @@ def train(args: argparse.Namespace):
         recall = evaluate_recall_at_k(
             _unwrap(audio_tower), _unwrap(text_tower), val_loader,
             val_vocab_for_eval, tokenizer, args.val_recall_k, device,
+            use_local=use_local_eval,
         )
         msg = "  ".join(f"R@{k}={v:.4f}" for k, v in sorted(recall.items()))
         logger.info("Validation [%s]: %s", tag, msg)
@@ -698,6 +763,7 @@ def train(args: argparse.Namespace):
         window_loss = 0.0  # rolling window for step-level logging
         window_a2t  = 0.0
         window_t2a  = 0.0
+        window_glob = 0.0
         window_pairs = 0
         t0 = time.time()
 
@@ -707,6 +773,9 @@ def train(args: argparse.Namespace):
             hotwords_batch: list[list[str]] = batch["hotwords"]
             batch_langs: list[str] = batch.get(
                 "langs", ["zh"] * len(hotwords_batch)
+            )
+            texts_batch: list[str] = batch.get(
+                "texts", [""] * len(hotwords_batch)
             )
 
             all_pos_words: list[str] = []
@@ -725,9 +794,22 @@ def train(args: argparse.Namespace):
             t2a_labels = torch.tensor(valid_batch_idx, dtype=torch.long, device=device)
             valid_batch_idx_t = torch.tensor(valid_batch_idx, dtype=torch.long, device=device)
 
-            def _compute_loss_a2t(a_embs_unique, p_embs, logit_scale):
+            use_transcript_global = (
+                want_local and args.glclap_global_text == "transcript"
+            )
+            if use_transcript_global:
+                tr_ids, tr_mask = tokenise_words(
+                    texts_batch, tokenizer,
+                    max_length=args.transcript_max_len, device=device,
+                )
+
+            def _compute_hotword_a2t_losses(
+                a_embs_unique, a_frames, a_frame_lens, p_embs, logit_scale,
+                want_pooled: bool, want_frame: bool,
+            ):
                 if bilingual_vocab:
-                    loss_sum = 0.0
+                    g_sum = 0.0
+                    l_sum = 0.0
                     count = 0
                     for lang in ("en", "zh"):
                         pair_idx = [k for k, lg in enumerate(pair_langs) if lg == lang]
@@ -753,14 +835,25 @@ def train(args: argparse.Namespace):
                             [valid_batch_idx[k] for k in pair_idx],
                             dtype=torch.long, device=device,
                         )
-                        sub = per_positive_infonce_loss(
-                            a_embs_unique[batch_idx_t], p_embs[idx_t], neg_embs, logit_scale,
-                        )
-                        loss_sum = loss_sum + sub * len(pair_idx)
+                        if want_pooled:
+                            sub_g = per_positive_infonce_loss(
+                                a_embs_unique[batch_idx_t], p_embs[idx_t], neg_embs, logit_scale,
+                            )
+                            g_sum = g_sum + sub_g * len(pair_idx)
+                        if want_frame:
+                            sub_l = per_positive_infonce_loss_local(
+                                a_frames, a_frame_lens, batch_idx_t,
+                                p_embs[idx_t], neg_embs, logit_scale,
+                            )
+                            l_sum = l_sum + sub_l * len(pair_idx)
                         count += len(pair_idx)
                     if count == 0:
-                        return p_embs.new_zeros(())
-                    return loss_sum / count
+                        z = p_embs.new_zeros(())
+                        return (z if want_pooled else None), (z if want_frame else None)
+                    return (
+                        (g_sum / count if want_pooled else None),
+                        (l_sum / count if want_frame else None),
+                    )
 
                 vd = train_vocab_data["all"]
                 exclude = {w for hws in hotwords_batch for w in hws}
@@ -768,38 +861,86 @@ def train(args: argparse.Namespace):
                     vd, exclude, args.num_negatives - 1,
                 )
                 if not sampled:
-                    return p_embs.new_zeros(())
+                    z = p_embs.new_zeros(())
+                    return (z if want_pooled else None), (z if want_frame else None)
                 neg_ids = vd["ids_cpu"][sampled].to(device)
                 neg_mask = vd["mask_cpu"][sampled].to(device)
                 neg_embs = text_tower(neg_ids, neg_mask)
-                return per_positive_infonce_loss(
-                    a_embs_unique[valid_batch_idx_t],
-                    p_embs,
-                    neg_embs,
-                    logit_scale,
-                )
+                loss_g = None
+                if want_pooled:
+                    loss_g = per_positive_infonce_loss(
+                        a_embs_unique[valid_batch_idx_t], p_embs, neg_embs, logit_scale,
+                    )
+                loss_l = None
+                if want_frame:
+                    loss_l = per_positive_infonce_loss_local(
+                        a_frames, a_frame_lens, valid_batch_idx_t,
+                        p_embs, neg_embs, logit_scale,
+                    )
+                return loss_g, loss_l
 
             def _forward():
                 logit_scale = log_scale.exp()
-                a_embs_unique = audio_tower(features, feature_lens)
+                if want_local:
+                    a_embs_unique, a_frames, a_frame_lens = audio_tower(
+                        features, feature_lens, return_frames=True,
+                    )
+                else:
+                    a_embs_unique = audio_tower(features, feature_lens)
+                    a_frames = a_frame_lens = None
                 p_embs = text_tower(pos_ids, pos_mask)
-                loss_a2t = _compute_loss_a2t(a_embs_unique, p_embs, logit_scale)
-                sims_t2a = logit_scale * (p_embs @ a_embs_unique.T)
-                loss_t2a = F.cross_entropy(sims_t2a, t2a_labels)
-                total = args.loss_w_a2t * loss_a2t + args.loss_w_t2a * loss_t2a
-                return total, loss_a2t.detach(), loss_t2a.detach()
+
+                if not want_local:
+                    loss_a2t_g, _ = _compute_hotword_a2t_losses(
+                        a_embs_unique, None, None, p_embs, logit_scale,
+                        want_pooled=True, want_frame=False,
+                    )
+                    sims_t2a = logit_scale * (p_embs @ a_embs_unique.T)
+                    loss_t2a_g = F.cross_entropy(sims_t2a, t2a_labels)
+                    total = args.loss_w_a2t * loss_a2t_g + args.loss_w_t2a * loss_t2a_g
+                    return total, loss_a2t_g.detach(), loss_t2a_g.detach(), None
+
+                _, loss_a2t_l = _compute_hotword_a2t_losses(
+                    a_embs_unique, a_frames, a_frame_lens, p_embs, logit_scale,
+                    want_pooled=False, want_frame=True,
+                )
+                loss_t2a_l = text2audio_infonce_loss_local(
+                    a_frames, a_frame_lens, p_embs, t2a_labels, logit_scale,
+                )
+                loss_local = args.loss_w_a2t * loss_a2t_l + args.loss_w_t2a * loss_t2a_l
+
+                if use_transcript_global:
+                    tr_embs = text_tower(tr_ids, tr_mask)
+                    loss_glob = symmetric_infonce_loss(
+                        a_embs_unique, tr_embs, logit_scale,
+                        args.loss_w_a2t, args.loss_w_t2a,
+                    )
+                else:
+                    loss_a2t_g, _ = _compute_hotword_a2t_losses(
+                        a_embs_unique, None, None, p_embs, logit_scale,
+                        want_pooled=True, want_frame=False,
+                    )
+                    sims_t2a = logit_scale * (p_embs @ a_embs_unique.T)
+                    loss_t2a_g = F.cross_entropy(sims_t2a, t2a_labels)
+                    loss_glob = (
+                        args.loss_w_a2t * loss_a2t_g + args.loss_w_t2a * loss_t2a_g
+                    ) / (args.loss_w_a2t + args.loss_w_t2a)
+
+                total = loss_glob + args.loss_w_local * loss_local
+                return (total, loss_a2t_l.detach(), loss_t2a_l.detach(),
+                        loss_glob.detach())
 
             optimizer.zero_grad(set_to_none=True)
             if scaler is not None:
                 with torch.cuda.amp.autocast():
-                    loss, loss_a2t_val, loss_t2a_val = _forward()
+                    loss, loss_a2t_val, loss_t2a_val, loss_glob_val = _forward()
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clip)
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                loss, loss_a2t_val, loss_t2a_val = _forward()
+                loss, loss_a2t_val, loss_t2a_val, loss_glob_val = _forward()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(trainable_params, args.grad_clip)
                 optimizer.step()
@@ -818,21 +959,25 @@ def train(args: argparse.Namespace):
             window_pairs += n_pairs
             window_a2t  += loss_a2t_val.item() * n_pairs
             window_t2a  += loss_t2a_val.item() * n_pairs
+            if loss_glob_val is not None:
+                window_glob += loss_glob_val.item() * n_pairs
 
             if is_main and global_step % args.log_every == 0:
                 elapsed = time.time() - t0
                 avg      = window_loss / max(window_pairs, 1)
                 avg_a2t  = window_a2t  / max(window_pairs, 1)
                 avg_t2a  = window_t2a  / max(window_pairs, 1)
-                window_loss = window_a2t = window_t2a = 0.0
+                avg_glob = window_glob / max(window_pairs, 1)
+                window_loss = window_a2t = window_t2a = window_glob = 0.0
                 window_pairs = 0
                 lr_now = scheduler.get_last_lr()[0]
                 temp_now = 1.0 / log_scale.exp().item()
+                glob_str = f"  Lg={avg_glob:.4f}" if want_local else ""
                 logger.info(
                     "epoch %d  step %d/%d  global_step %d  "
-                    "loss=%.4f  a2t=%.4f  t2a=%.4f  lr=%.2e  temp=%.4f  t=%.1fs",
+                    "loss=%.4f  a2t=%.4f  t2a=%.4f%s  lr=%.2e  temp=%.4f  t=%.1fs",
                     epoch, step, len(train_loader), global_step,
-                    avg, avg_a2t, avg_t2a, lr_now, temp_now, elapsed,
+                    avg, avg_a2t, avg_t2a, glob_str, lr_now, temp_now, elapsed,
                 )
 
             # Step-level validation: barrier ensures all ranks finish the step

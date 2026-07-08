@@ -14,6 +14,7 @@ from rag_asr.model_layout import (
     DEFAULT_HOTWORD_ADAPTER_FILENAME,
     DEFAULT_HOTWORD_ADAPTER_SUBDIR,
 )
+from rag_asr.retrieval_mode import normalize_retrieval_mode
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -80,8 +81,24 @@ class ModelConfig:
     adapter_subdir: str = DEFAULT_HOTWORD_ADAPTER_SUBDIR
     adapter_filename: str = DEFAULT_HOTWORD_ADAPTER_FILENAME
     adapter_ckpt: Optional[str] = None
+    adapter_ckpts: Optional[dict[str, str]] = None
     embed_dim: int = 512
     adapter_hidden_dim: Optional[int] = 512
+
+    def __post_init__(self) -> None:
+        if self.adapter_ckpts is None:
+            return
+        if not isinstance(self.adapter_ckpts, dict):
+            raise ValueError("model.adapter_ckpts must be a mapping")
+        normalized: dict[str, str] = {}
+        for raw_mode, path in self.adapter_ckpts.items():
+            mode = normalize_retrieval_mode(raw_mode)
+            if mode in normalized:
+                raise ValueError(
+                    f"duplicate adapter_ckpts entry for retrieval_mode {mode!r}"
+                )
+            normalized[mode] = path
+        object.__setattr__(self, "adapter_ckpts", normalized)
 
 
 @dataclass(frozen=True)
@@ -91,12 +108,18 @@ class RetrievalConfig:
     seed_pool_file: Optional[str] = "examples/hotword_pool.txt"
     default_user: str = "default"
     default_top_k: int = 50
+    retrieval_mode: str = "frame_max"
     cache_dir: Optional[str] = "var/retrieve_cache"
     batch_text: int = 512
     enrollment_store_dir: str = "var/enrollments"
     enrollment_cache_max_entries: int = 256
     enrollment_cache_device: str = "auto"
     enrollment_metadata_touch_interval_sec: float = 300.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "retrieval_mode", normalize_retrieval_mode(self.retrieval_mode)
+        )
 
 
 @dataclass(frozen=True)
@@ -125,21 +148,38 @@ class RagASRConfig:
     runtime: RuntimeConfig = RuntimeConfig()
     triton: TritonConfig = TritonConfig()
 
+    def _selected_adapter_ckpt(self) -> Optional[str]:
+        if self.model.adapter_ckpt:
+            return self.model.adapter_ckpt
+        if not self.model.adapter_ckpts:
+            return None
+        return self.model.adapter_ckpts.get(self.retrieval.retrieval_mode)
+
+    def _selected_adapter_subdir(self) -> str:
+        if self._selected_adapter_ckpt():
+            return self.model.adapter_subdir
+        subdir = self.model.adapter_subdir.rstrip("/")
+        if Path(subdir).name == self.retrieval.retrieval_mode:
+            return subdir
+        return f"{subdir}/{self.retrieval.retrieval_mode}"
+
     def to_serve_kwargs(self) -> dict[str, Any]:
+        adapter_ckpt = self._selected_adapter_ckpt()
         return {
             "base_model_path": _resolve_path(self.model.base_model_path),
             "hotword_pool_file": _resolve_path(self.retrieval.hotword_pool_file),
             "hotword_pool_dir": _resolve_path(self.retrieval.hotword_pool_dir),
             "seed_pool_file": _resolve_path(self.retrieval.seed_pool_file),
             "default_user": self.retrieval.default_user,
-            "adapter_ckpt": _resolve_path(self.model.adapter_ckpt)
-            if self.model.adapter_ckpt
+            "adapter_ckpt": _resolve_path(adapter_ckpt)
+            if adapter_ckpt
             else None,
-            "adapter_subdir": self.model.adapter_subdir,
+            "adapter_subdir": self._selected_adapter_subdir(),
             "adapter_filename": self.model.adapter_filename,
             "embed_dim": self.model.embed_dim,
             "adapter_hidden_dim": self.model.adapter_hidden_dim,
             "default_top_k": self.retrieval.default_top_k,
+            "retrieval_mode": self.retrieval.retrieval_mode,
             "cache_dir": _resolve_path(self.retrieval.cache_dir, allow_special=True),
             "enrollment_store_dir": _resolve_path(
                 self.retrieval.enrollment_store_dir
@@ -155,6 +195,7 @@ class RagASRConfig:
         }
 
     def to_triton_parameters(self) -> dict[str, str]:
+        adapter_ckpt = self._selected_adapter_ckpt()
         params = {
             "EXECUTION_ENV_PATH": _resolve_path(self.triton.exec_env) or "",
             "base_model_path": _resolve_path(self.model.base_model_path) or "",
@@ -162,13 +203,14 @@ class RagASRConfig:
             "hotword_pool_dir": _resolve_path(self.retrieval.hotword_pool_dir) or "",
             "seed_pool_file": _resolve_path(self.retrieval.seed_pool_file) or "",
             "default_user": self.retrieval.default_user,
-            "adapter_subdir": self.model.adapter_subdir,
+            "adapter_subdir": self._selected_adapter_subdir(),
             "adapter_filename": self.model.adapter_filename,
             "embed_dim": str(self.model.embed_dim),
             "adapter_hidden_dim": ""
             if self.model.adapter_hidden_dim is None
             else str(self.model.adapter_hidden_dim),
             "default_top_k": str(self.retrieval.default_top_k),
+            "retrieval_mode": self.retrieval.retrieval_mode,
             "cache_dir": _resolve_path(self.retrieval.cache_dir, allow_special=True) or "",
             "enrollment_store_dir": _resolve_path(
                 self.retrieval.enrollment_store_dir
@@ -183,8 +225,8 @@ class RagASRConfig:
             ),
             "device": self.runtime.device,
         }
-        if self.model.adapter_ckpt:
-            params["adapter_ckpt"] = _resolve_path(self.model.adapter_ckpt) or ""
+        if adapter_ckpt:
+            params["adapter_ckpt"] = _resolve_path(adapter_ckpt) or ""
         return params
 
 

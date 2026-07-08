@@ -21,7 +21,10 @@ def resolve_hotword_adapter(
 
     Deployment should prefer a self-contained layout:
 
-    ``base_model_path / hotword_adapter / best_adapter.pt``
+    ``base_model_path / hotword_adapter / {pooled,frame_max} / best_adapter.pt``
+
+    The caller is responsible for passing the mode-specific ``adapter_subdir``
+    (for example ``hotword_adapter/frame_max``).
 
     An explicit ``adapter_ckpt`` remains supported for experiments and
     backwards-compatible scripts.
@@ -37,6 +40,7 @@ def resolve_hotword_adapter(
             "hotword adapter checkpoint not found: "
             f"{path}. Put the adapter under "
             f"{Path(base_model_path) / adapter_subdir / adapter_filename} "
-            "or set adapter_ckpt explicitly."
+            "or set adapter_ckpt explicitly. The service layout convention is "
+            "base_model_path/hotword_adapter/{pooled,frame_max}/best_adapter.pt."
         )
     return path

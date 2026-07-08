@@ -32,8 +32,10 @@
 
 - `RAG_ASR_DATA_ROOT`：外部 ASR 数据根目录，用于推导 Common Voice、GigaSpeech、AISHELL 等 manifest 位置。
 - `RAG_ASR_HOTWORD_ROOT`：热词词表根目录；未设置时，若有 `RAG_ASR_DATA_ROOT`，默认推导为 `${RAG_ASR_DATA_ROOT}/hotword`。
-- `RAG_ASR_BASE_MODEL`：覆盖项目内默认基座模型目录 `checkpoints/base/amphion_1.7b_merged`。
-- `RAG_ASR_ADAPTER`：离线推理 adapter checkpoint；默认使用 `${RAG_ASR_BASE_MODEL}/hotword_adapter/best_adapter.pt`。
+- `RAG_ASR_BASE_MODEL`：覆盖默认基座模型目录 `/home/ubuntu/models/hf/Amphion/AmphionASR-1.7B`。
+- `RAG_ASR_RETRIEVAL_MODE`：离线推理检索模式，默认 `frame_max`；可选 `pooled` / `frame_max`，旧名 `global` / `local` 仍兼容。
+- `RAG_ASR_ADAPTER`：离线推理 adapter checkpoint 显式覆盖；未设置时按 `RAG_ASR_RETRIEVAL_MODE` 自动选择 `${RAG_ASR_BASE_MODEL}/hotword_adapter/{pooled,frame_max}/best_adapter.pt`。
+- `RAG_ASR_POOLED_ADAPTER` / `RAG_ASR_FRAME_MAX_ADAPTER`：分别覆盖 `pooled` / `frame_max` 模式的默认 adapter 路径。
 
 `scripts/build_envs.sh` 是在线服务环境的一键总入口，按顺序调用 `build_triton_server_env.sh` 和 `build_triton_exec_env.sh`。如果只想重建其中一层，可设置 `RAG_ASR_SKIP_TRITON_SERVER_ENV=1` 或 `RAG_ASR_SKIP_TRITON_EXEC_ENV=1`。
 

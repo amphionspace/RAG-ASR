@@ -105,7 +105,8 @@ class HotwordsRetrievalDataset(Dataset):
                 n_skipped += 1
                 continue
             lang = infer_retrieval_lang(getattr(sups[0], "language", None))
-            self._cuts.append((cut, hotwords, lang))
+            text = (getattr(sups[0], "text", None) or "").strip()
+            self._cuts.append((cut, hotwords, lang, text))
         logger.info(
             "HotwordsRetrievalDataset: loaded %d cuts, skipped %d "
             "(too short hotword list or over max_duration).",
@@ -116,7 +117,7 @@ class HotwordsRetrievalDataset(Dataset):
         return len(self._cuts)
 
     def __getitem__(self, idx: int) -> dict:
-        cut, hotwords, lang = self._cuts[idx]
+        cut, hotwords, lang, text = self._cuts[idx]
         # Load mono audio; CutSet should already be resampled to 16 kHz upstream.
         audio = cut.load_audio()  # (C, T) float32 numpy
         if audio.ndim == 2:
@@ -127,6 +128,7 @@ class HotwordsRetrievalDataset(Dataset):
             "sample_rate": 16000,
             "hotwords": hotwords,
             "lang": lang,
+            "text": text,
         }
 
 
@@ -176,6 +178,7 @@ def retrieval_collate_fn_factory(fbank_extractor) -> Callable[[list[dict]], dict
         ids = [item["id"] for item in batch]
         hotwords_list = [item["hotwords"] for item in batch]
         langs = [item.get("lang", "zh") for item in batch]
+        texts = [item.get("text", "") for item in batch]
 
         # Extract per-utterance mel features
         feats_list: list[torch.Tensor] = []
@@ -200,6 +203,7 @@ def retrieval_collate_fn_factory(fbank_extractor) -> Callable[[list[dict]], dict
             "feature_lens": feature_lens,  # (B,)
             "hotwords": hotwords_list,     # list[list[str]]
             "langs": langs,                # list[str]  'en' | 'zh'
+            "texts": texts,                # list[str]  full transcription per utt
         }
 
     return collate

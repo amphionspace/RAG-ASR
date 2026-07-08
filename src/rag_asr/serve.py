@@ -32,6 +32,7 @@ from rag_asr.model_layout import (
     DEFAULT_HOTWORD_ADAPTER_SUBDIR,
     resolve_hotword_adapter,
 )
+from rag_asr.retrieval_mode import FRAME_MAX_RETRIEVAL_MODE, normalize_retrieval_mode
 
 logger = logging.getLogger(__name__)
 _USER_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
@@ -51,6 +52,7 @@ class ServeConfig:
     embed_dim: int = 512
     adapter_hidden_dim: Optional[int] = 512
     default_top_k: int = 50
+    retrieval_mode: str = "pooled"
     cache_dir: Optional[str] = "_retrieve_cache"
     device: str = "cuda"
     num_mel_bins: int = 128
@@ -107,6 +109,7 @@ class RAGASRRetriever:
     def __init__(self, cfg: ServeConfig):
         from rag_asr.model_loader import load_towers
 
+        cfg.retrieval_mode = normalize_retrieval_mode(cfg.retrieval_mode)
         self.cfg = cfg
         self._device = torch.device(cfg.device)
         self.default_user = self._resolve_user(cfg.default_user)
@@ -139,11 +142,12 @@ class RAGASRRetriever:
 
         self.fbank = WhisperFbank(WhisperFbankConfig(num_filters=cfg.num_mel_bins))
         logger.info(
-            "RAGASRRetriever ready: default_user=%s pool=%d words, projector_dim=%d, device=%s",
+            "RAGASRRetriever ready: default_user=%s pool=%d words, projector_dim=%d, device=%s, retrieval_mode=%s",
             self.default_user,
             len(default_pool.words),
             self.projector_dim,
             self._device,
+            cfg.retrieval_mode,
         )
 
     @staticmethod
@@ -707,7 +711,7 @@ class RAGASRRetriever:
         features = features.to(self._device)
         feat_lens = feat_lens.to(self._device)
         with torch.no_grad():
-            _, proj, proj_lens = self.audio_tower.forward_with_projector(
+            _, proj, proj_lens, _ = self.audio_tower.forward_with_projector(
                 features,
                 feat_lens,
             )
@@ -1069,14 +1073,21 @@ class RAGASRRetriever:
             enrollment_scope_ids = user_ids
 
         if packed_audio and hasattr(self.audio_tower, "forward_with_projector_packed"):
-            pooled, proj, proj_lens = self.audio_tower.forward_with_projector_packed(
-                features, feat_lens
+            pooled, proj, proj_lens, retrieval_frames = (
+                self.audio_tower.forward_with_projector_packed(
+                    features, feat_lens
+                )
             )
         else:
-            pooled, proj, proj_lens = self.audio_tower.forward_with_projector(
-                features, feat_lens
+            pooled, proj, proj_lens, retrieval_frames = (
+                self.audio_tower.forward_with_projector(
+                    features, feat_lens
+                )
             )
 
+        from rag_asr.dual_tower import score_retrieval
+
+        _frame_max = self.cfg.retrieval_mode == FRAME_MAX_RETRIEVAL_MODE
         results: list[InferResult] = []
         for i, top_k in enumerate(top_k_values):
             pool = self._get_or_load_pool(user_ids[i])
@@ -1086,7 +1097,22 @@ class RAGASRRetriever:
             pool_size = len(hotword_pool)
             top_k = 0 if not enable_hotword_recalls[i] else min(max(int(top_k), 0), pool_size)
             if top_k:
-                scores = pooled[i] @ pool_embs_gpu.T
+                if _frame_max:
+                    scores = score_retrieval(
+                        retrieval_mode="frame_max",
+                        pooled=pooled[i],
+                        retrieval_frames=retrieval_frames[i : i + 1],
+                        frame_lens=proj_lens[i : i + 1],
+                        pool_embs=pool_embs_gpu,
+                    )
+                else:
+                    scores = score_retrieval(
+                        retrieval_mode="pooled",
+                        pooled=pooled[i],
+                        retrieval_frames=None,
+                        frame_lens=None,
+                        pool_embs=pool_embs_gpu,
+                    )
                 indices = scores.topk(top_k).indices.tolist()
                 words = [hotword_pool[j] for j in indices]
             else:
@@ -1312,6 +1338,7 @@ class RAGASRRetriever:
                 if params.get("adapter_hidden_dim")
                 else 512,
                 default_top_k=int(params.get("default_top_k", "50")),
+                retrieval_mode=params.get("retrieval_mode", "pooled"),
                 cache_dir=params.get("cache_dir", "_retrieve_cache"),
                 device=params.get("device", "cuda"),
                 enrollment_store_dir=params.get(

@@ -57,8 +57,8 @@ startup asks systemd to start RAG-ASR before AudioLLM.
 
 默认模型与 `scripts/infer.sh` 一致：
 
-- 基座：`checkpoints/base/amphion_1.7b_merged`（`config.model_type=qwen3_asr`，目录名沿用历史命名）
-- Adapter：`checkpoints/base/amphion_1.7b_merged/hotword_adapter/best_adapter.pt`
+- 基座：`/home/ubuntu/models/hf/Amphion/AmphionASR-1.7B`
+- Adapter：`base_model_path/hotword_adapter/{pooled,frame_max}/best_adapter.pt`，由 `retrieval.retrieval_mode` 自动选择
 - 词池：默认以 `examples/hotword_pool.txt` 作为只读种子，运行时可变词池写到 `var/hotwords/<hotword_pool_id>.txt`；公开协议只使用 `hotword_pool_id` / `HOTWORD_POOL_ID`
 - Enrollment：只持久化推理后的 embedding tensor 与元数据，默认写到 `var/enrollments/{enrollment_scope_id}/{enrollment_id}.pt` 和同名 `.json`；`enrollment_scope_id` 是声纹注册隔离域，不是业务用户 ID
 - 配置入口：`configs/serve.yaml`
@@ -674,8 +674,10 @@ Triton 自带 CUDA 13 runtime，与主机驱动 12.8 不匹配时，Triton 侧�
 常用字段：
 
 - `model.base_model_path`：基座模型目录。
-- `model.adapter_subdir` / `model.adapter_filename`：默认读取 `base_model_path/hotword_adapter/best_adapter.pt`。
-- `model.adapter_ckpt`：可选旧式显式 adapter 路径，设置后优先级高于内置目录。
+- `model.adapter_subdir` / `model.adapter_filename`：默认按 `retrieval.retrieval_mode` 读取 `base_model_path/hotword_adapter/{pooled,frame_max}/best_adapter.pt`。如果 `adapter_subdir` 已经以模式名结尾，则不会重复追加。
+- `model.adapter_ckpt`：可选显式 adapter 路径，设置后优先级高于内置目录约定。
+- `model.adapter_ckpts`：可选模式到 adapter 路径的映射，例如 `pooled: ...`、`frame_max: ...`；优先级低于 `model.adapter_ckpt`，高于内置目录约定。
+- `retrieval.retrieval_mode`：检索打分模式。`pooled` 使用整句 pooled embedding；`frame_max` 使用帧级 embedding 的 max-over-frame GLCLAP 打分。旧名 `global` / `local` 仍作为兼容别名接受。
 - `retrieval.hotword_pool_dir`：运行时热词池目录，默认 `var/hotwords`；文件名按 `hotword_pool_id` 隔离。
 - `retrieval.seed_pool_file`：只读种子词池，默认 `examples/hotword_pool.txt`，用于初始化 default 用户。
 - `retrieval.default_user`：未传 `HOTWORD_POOL_ID` / `hotword_pool_id` 时使用的默认热词池 ID，默认 `default`。字段名是内部配置名，公开协议不再使用 `user_id`。

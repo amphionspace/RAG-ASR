@@ -74,7 +74,7 @@ pip install -e ".[serve]"   # 可选，本地 HTTP 调试服务
 ```bash
 cd RAG-ASR
 
-# 指向包含 hotword_adapter/best_adapter.pt 的基座模型目录。
+# 指向包含 hotword_adapter/{pooled,frame_max}/best_adapter.pt 的基座模型目录。
 export RAG_ASR_MODEL_DIR=/path/to/amphion_1.7b_merged
 
 docker compose build rag-asr-triton
@@ -193,7 +193,20 @@ bash scripts/infer.sh
 推荐模型目录（均在项目内）：
 
 - 基座模型：`checkpoints/base/amphion_1.7b_merged`
-- 热词 adapter：`checkpoints/base/amphion_1.7b_merged/hotword_adapter/best_adapter.pt`
+- 热词 adapter：`checkpoints/base/amphion_1.7b_merged/hotword_adapter/{pooled,frame_max}/best_adapter.pt`
+
+服务部署约定基座模型目录自带两个检索 adapter：
+
+```text
+base_model_path/
+└── hotword_adapter/
+    ├── pooled/
+    │   └── best_adapter.pt
+    └── frame_max/
+        └── best_adapter.pt
+```
+
+`retrieval.retrieval_mode: pooled` 会加载 `hotword_adapter/pooled/best_adapter.pt`；`retrieval.retrieval_mode: frame_max` 会加载 `hotword_adapter/frame_max/best_adapter.pt`。旧名 `global` / `local` 仍作为兼容别名接受，但新配置应使用 `pooled` / `frame_max`。
 
 显式 `adapter_ckpt` 仍可用于训练和实验；服务部署优先使用基座模型目录内的 `hotword_adapter`，避免 base model 与 adapter 版本错配。
 
@@ -210,9 +223,10 @@ from rag_asr.infer import retrieve_neural
 
 hw_map = retrieve_neural(
     items, [], top_k_max=50,
-    adapter_ckpt="checkpoints/base/.../hotword_adapter/best_adapter.pt",
+    adapter_ckpt="checkpoints/base/.../hotword_adapter/frame_max/best_adapter.pt",
     base_model_path="checkpoints/base/amphion_1.7b_merged",
     hotword_pool_file="pool.txt",
+    retrieval_mode="frame_max",
 )
 ```
 

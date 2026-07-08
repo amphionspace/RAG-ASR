@@ -20,6 +20,7 @@ from rag_asr.cache import (
 )
 from rag_asr.dataset import tokenise_words
 from rag_asr.model_loader import load_towers
+from rag_asr.retrieval_mode import FRAME_MAX_RETRIEVAL_MODE, normalize_retrieval_mode
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,7 @@ def retrieve_neural(
     cache_dir: Optional[str | Path] = None,
     shard_id: int = 0,
     num_shards: int = 1,
+    retrieval_mode: str = "pooled",
 ) -> dict[str, dict]:
     """Retrieve top-K hotwords per utterance using trained dual-tower adapters.
 
@@ -179,6 +181,8 @@ def retrieve_neural(
     """
     if top_k_max <= 0:
         raise ValueError(f"retrieve_neural: top_k_max must be > 0, got {top_k_max!r}.")
+    retrieval_mode = normalize_retrieval_mode(retrieval_mode)
+    _frame_max = retrieval_mode == FRAME_MAX_RETRIEVAL_MODE
 
     per_item_candidates: Optional[dict[str, list[str]]] = None
     pool_word_to_idx: Optional[dict[str, int]] = None
@@ -227,8 +231,8 @@ def retrieve_neural(
 
     tag = f"shard {shard_id}/{num_shards} " if num_shards > 1 else ""
     logger.info(
-        "%stowers ready. pool=%d  top_k_max=%d  items=%d",
-        tag, len(hotword_pool), top_k_max, len(items),
+        "%stowers ready. pool=%d  top_k_max=%d  items=%d  retrieval_mode=%s",
+        tag, len(hotword_pool), top_k_max, len(items), retrieval_mode,
     )
 
     from lhotse.features import WhisperFbank, WhisperFbankConfig
@@ -269,7 +273,7 @@ def retrieve_neural(
         pool_word_to_idx = {w: i for i, w in enumerate(hotword_pool)}
 
     _faiss_index = None
-    if per_item_candidates is None:
+    if not _frame_max and per_item_candidates is None:
         try:
             import faiss  # type: ignore
 
@@ -341,20 +345,47 @@ def retrieve_neural(
         feat_lens = feat_lens.to(_device)
 
         with torch.no_grad():
-            a_embs = audio_tower(features, feat_lens)
+            if _frame_max:
+                _, a_frames, a_frame_lens = audio_tower(
+                    features, feat_lens, return_frames=True,
+                )
+                a_embs = None
+            else:
+                a_embs = audio_tower(features, feat_lens)
 
         batch_indices: list[list[int]] | None = None
-        if per_item_candidates is None and _faiss_index is not None:
+        if not _frame_max and per_item_candidates is None and _faiss_index is not None:
             import faiss  # type: ignore
 
             _, batch_idx = _faiss_index.search(
                 a_embs.cpu().numpy().astype("float32"), topk_k,
             )
             batch_indices = [row.tolist() for row in batch_idx]
-        elif per_item_candidates is None:
+        elif not _frame_max and per_item_candidates is None:
             with torch.no_grad():
                 batch_scores = a_embs @ pool_embs_gpu.T
                 batch_indices = batch_scores.topk(topk_k, dim=1).indices.cpu().tolist()
+
+        from rag_asr.dual_tower import score_retrieval
+
+        def _score_against(i: int, cand_idx=None):
+            if _frame_max:
+                return score_retrieval(
+                    retrieval_mode="frame_max",
+                    pooled=a_frames[i],
+                    retrieval_frames=a_frames[i : i + 1],
+                    frame_lens=a_frame_lens[i : i + 1],
+                    pool_embs=pool_embs_gpu,
+                    cand_idx=cand_idx,
+                )
+            return score_retrieval(
+                retrieval_mode="pooled",
+                pooled=a_embs[i],
+                retrieval_frames=None,
+                frame_lens=None,
+                pool_embs=pool_embs_gpu,
+                cand_idx=cand_idx,
+            )
 
         for i, it in enumerate(valid_items):
             uid = it["id"]
@@ -368,16 +399,14 @@ def retrieve_neural(
                         pool_word_to_idx[w] for w in item_cands if w in pool_word_to_idx
                     ]
                     if g_indices:
-                        item_scores = (
-                            a_embs[i].unsqueeze(0) @ pool_embs_gpu[g_indices].T
-                        ).squeeze(0)
+                        item_scores = _score_against(i, g_indices)
                         local_k = min(top_k_max, len(g_indices))
                         local_idx = item_scores.topk(local_k).indices.tolist()
                         retrieved = [item_cands[j] for j in local_idx]
                     else:
                         retrieved = []
                 else:
-                    scores = (a_embs[i].unsqueeze(0) @ pool_embs_gpu.T).squeeze(0)
+                    scores = _score_against(i)
                     local_k = min(top_k_max, scores.shape[0])
                     retrieved = [
                         hotword_pool[j] for j in scores.topk(local_k).indices.tolist()
@@ -385,7 +414,11 @@ def retrieve_neural(
             elif batch_indices is not None:
                 retrieved = [hotword_pool[j] for j in batch_indices[i]]
             else:
-                retrieved = []
+                scores = _score_against(i)
+                local_k = min(top_k_max, scores.shape[0])
+                retrieved = [
+                    hotword_pool[j] for j in scores.topk(local_k).indices.tolist()
+                ]
 
             hw_map[uid] = {
                 "id": uid,

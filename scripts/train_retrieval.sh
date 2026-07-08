@@ -26,8 +26,11 @@ AISHELL3_DIR="${RAG_ASR_AISHELL3_HOTWORD_DIR:-${DATA_ROOT:+$DATA_ROOT/data_aishe
 MAGICDATA_DIR="${RAG_ASR_MAGICDATA_HOTWORD_DIR:-${DATA_ROOT:+$DATA_ROOT/MAGICDATA/lhotse/hotwords}}"
 THCHS30_DIR="${RAG_ASR_THCHS30_HOTWORD_DIR:-${DATA_ROOT:+$DATA_ROOT/data_thchs30/lhotse/hotwords}}"
 ZHVOICE_DIR="${RAG_ASR_ZHVOICE_HOTWORD_DIR:-${DATA_ROOT:+$DATA_ROOT/zhvoice/lhotse/hotwords}}"
-EXP_NAME="${RAG_ASR_EXP_NAME:-amphion-1.7b_retrieval_v1.2}"
+EXP_NAME="${RAG_ASR_EXP_NAME:-amphion-1.7b_retrieval_v2.0}"
 OUTPUT_DIR="${RAG_ASR_OUTPUT_DIR:-exp/retrieval/${EXP_NAME}}"
+LOSS_TYPE="${RAG_ASR_LOSS_TYPE:-global_local}"
+LOSS_W_LOCAL="${RAG_ASR_LOSS_W_LOCAL:-1.0}"
+GLCLAP_GLOBAL_TEXT="${RAG_ASR_GLCLAP_GLOBAL_TEXT:-transcript}"
 
 require_dir() {
     local label=$1 path=$2 hint=$3
@@ -140,6 +143,9 @@ torchrun \
     $( [ "${LEARNABLE_TEMPERATURE}" = "true" ] && echo "--learnable-temperature" ) \
     --loss-w-a2t     "${LOSS_W_A2T}" \
     --loss-w-t2a     "${LOSS_W_T2A}" \
+    --loss-type      "${LOSS_TYPE}" \
+    --loss-w-local   "${LOSS_W_LOCAL}" \
+    --glclap-global-text "${GLCLAP_GLOBAL_TEXT}" \
     --grad-clip      "${GRAD_CLIP}" \
     --num-workers    "${NUM_WORKERS}" \
     --seed           "${SEED}" \
